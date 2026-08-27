@@ -148,6 +148,21 @@ test("DID login creates a separate disabled operational agent", async (t) => {
   assert.equal(created.agent.enabled, false);
   assert.equal(created.recoveryKey.crv, "Ed25519");
 
+  const deleteResponse = await fetch(`${base}/v1/agents/${created.agent.id}`, {
+    method: "DELETE", headers: { authorization: `Bearer ${login.token}`, origin: "https://pact_example.ar.io" },
+  });
+  assert.equal(deleteResponse.status, 200);
+  const listResponse = await fetch(`${base}/v1/agents`, {
+    headers: { authorization: `Bearer ${login.token}`, origin: "https://pact_example.ar.io" },
+  });
+  assert.equal(listResponse.status, 200);
+  assert.deepEqual((await listResponse.json()).agents, []);
+  const deletedAgent = store.agentById(created.agent.id);
+  assert.equal(deletedAgent.enabled, 0);
+  assert.equal(deletedAgent.private_key_enc, "deleted");
+  assert.equal(deletedAgent.api_key_enc, "deleted");
+  assert.ok(deletedAgent.deleted_at);
+
   const outsider = generateIdentity();
   const denied = await fetch(`${base}/v1/auth/challenge`, {
     method: "POST", headers: { "content-type": "application/json", origin: "https://pact_example.ar.io" }, body: JSON.stringify({ did: outsider.did }),
