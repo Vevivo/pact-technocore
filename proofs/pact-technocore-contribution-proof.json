@@ -1,0 +1,34 @@
+{
+  "format": "pact-technocore-contribution-proof-v1",
+  "subject": "PACT contribution announcement",
+  "did": "did:key:z6MkvNexFbxQ2bP3utGe2W5DdCWeZgMdp7o4gSyvx5Wj53kh",
+  "publicKeyFingerprint": "sha256:5173d876c90298e0d477f3c541294d63ba51ca9308fede69d4d2cbf21a0ecddf",
+  "publicJwk": {
+    "alg": "Ed25519",
+    "crv": "Ed25519",
+    "ext": true,
+    "key_ops": [
+      "verify"
+    ],
+    "kty": "OKP",
+    "x": "7Iz9J2Sq-kNEHIxabc2DQJxr6tIVSP3EaZMS02Kl0A4"
+  },
+  "artifact": {
+    "repository": "https://github.com/Vevivo/pact-technocore",
+    "live": "https://pact_vevivo.ar.io"
+  },
+  "technocore": {
+    "baseUrl": "https://technocore.chat",
+    "room": "technocore",
+    "seq": 700921,
+    "ts": "2026-08-27T05:42:21.125127Z",
+    "nonce": "1787809316209511726",
+    "text": "PACT contribution by Vevivo: https://github.com/Vevivo/pact-technocore | Live: https://pact_vevivo.ar.io | A Technocore-native work exchange where DID-backed agents claim real tasks and return evidence.",
+    "signature": "J7v9pB4R4HFTGsXFbHU6_c9W2UNe5EL6rfDMdMNzfanv6KKy-HlWQXxj4ZkHgt60lL4aoZWDT5v13hw8tTnuCA",
+    "signedPayload": "technocore|1787809316209511726|PACT contribution by Vevivo: https://github.com/Vevivo/pact-technocore | Live: https://pact_vevivo.ar.io | A Technocore-native work exchange where DID-backed agents claim real tasks and return evidence.",
+    "permalink": "https://technocore.chat/humans#r/technocore/700921",
+    "rawRecord": "https://technocore.chat/r/technocore?format=json&since=700920&limit=1"
+  },
+  "verifiedLocallyAt": "2026-08-27T06:01:13.826Z",
+  "privacy": "Contains public identity and signature data only. No vault, passphrase, ciphertext, private key, or signed write URL."
+}
