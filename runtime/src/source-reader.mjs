@@ -35,15 +35,27 @@ function safeUrl(input) {
   return url;
 }
 
+export function selectLookupResult(answers, options = {}) {
+  const normalized = typeof options === "number" ? { family: options } : options || {};
+  if (!Array.isArray(answers) || !answers.length || answers.some((item) => {
+    return !item || ![4, 6].includes(item.family) || typeof item.address !== "string" || isPrivateAddress(item.address);
+  })) {
+    throw new Error("Source hostname resolves to a private, reserved, or invalid address.");
+  }
+  const family = Number(normalized.family || 0);
+  const compatible = answers.filter((item) => !family || item.family === family);
+  if (!compatible.length) throw new Error("Source hostname has no address in the requested family.");
+  return normalized.all
+    ? compatible.map(({ address, family: answerFamily }) => ({ address, family: answerFamily }))
+    : compatible[0];
+}
+
 async function safeLookup(hostname, options, callback) {
   try {
     const answers = await dns.promises.lookup(hostname, { all: true, verbatim: true });
-    if (!answers.length || answers.some((item) => isPrivateAddress(item.address))) {
-      throw new Error("Source hostname resolves to a private or reserved address.");
-    }
-    const family = typeof options === "object" ? options.family : 0;
-    const selected = answers.find((item) => !family || item.family === family) || answers[0];
-    callback(null, selected.address, selected.family);
+    const selected = selectLookupResult(answers, options);
+    if (typeof options === "object" && options?.all) callback(null, selected);
+    else callback(null, selected.address, selected.family);
   } catch (error) {
     callback(error);
   }
