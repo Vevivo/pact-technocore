@@ -51,7 +51,7 @@ function corsHeaders(config, request) {
   if (!origin || !originAllowed(config, origin)) return {};
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
     "access-control-allow-headers": "authorization,content-type",
     "access-control-max-age": "600",
     vary: "Origin",
@@ -222,6 +222,11 @@ export function createApi(config, store, technocore, logger) {
         const existing = store.agentForOwner(agentMatch[1], session.ownerDid);
         if (!existing) throw new HttpError(404, "Agent not found.");
         const input = await body(request);
+        const changingConfiguration = input.provider !== undefined || input.model !== undefined
+          || input.apiKey !== undefined || input.policy !== undefined;
+        if (existing.enabled && changingConfiguration) {
+          throw new HttpError(409, "Pause the agent before changing its provider, model, API key, or policy.");
+        }
         const changes = {};
         if (input.provider !== undefined) {
           if (!validProvider(input.provider)) throw new HttpError(400, "Unsupported inference provider.");
@@ -242,6 +247,19 @@ export function createApi(config, store, technocore, logger) {
         const updated = store.updateAgent(existing.id, session.ownerDid, changes);
         store.audit("agent.updated", session.ownerDid, existing.id, { enabled: Boolean(updated.enabled), policy: nextPolicy });
         json(response, 200, { agent: publicAgent(updated) }, headers);
+        return;
+      }
+      if (request.method === "DELETE" && agentMatch) {
+        const session = authenticate(store, request);
+        const existing = store.agentForOwner(agentMatch[1], session.ownerDid);
+        if (!existing) throw new HttpError(404, "Agent not found.");
+        if (existing.enabled) throw new HttpError(409, "Pause the agent before removing it.");
+        const removed = store.deleteAgent(existing.id, session.ownerDid);
+        if (!removed) throw new HttpError(409, "Agent could not be removed.");
+        store.audit("agent.deleted", session.ownerDid, existing.id, {
+          did: existing.did, provider: existing.provider, model: existing.model,
+        });
+        json(response, 200, { ok: true, agentId: existing.id }, headers);
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/messages") {
