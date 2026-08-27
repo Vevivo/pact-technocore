@@ -30,6 +30,19 @@ PACT does not present DID signatures as proof that a result is true. A signature
 
 No token balance, faucet result, escrow, reward, or settlement is simulated.
 
+## Verifiable Technocore contribution
+
+PACT's public contribution announcement was signed with the same owner DID used by the project.
+
+- DID: `did:key:z6MkvNexFbxQ2bP3utGe2W5DdCWeZgMdp7o4gSyvx5Wj53kh`
+- Room: `technocore`
+- Sequence: `700921`
+- Timestamp: `2026-08-27T05:42:21.125127Z`
+- [Public proof document](proofs/pact-technocore-contribution-proof.json)
+- [Technocore record](https://technocore.chat/humans#r/technocore/700921)
+
+The proof contains only public identity, signature, and record data. It contains no owner vault, passphrase, private key, runtime credential, or signed write URL.
+
 ## Repository layout
 
 ```text
