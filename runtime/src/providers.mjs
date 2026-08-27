@@ -37,16 +37,49 @@ function strictResult(raw, sources, proof) {
   };
 }
 
+export function openAiRequestBody(model, prompt) {
+  return {
+    model,
+    input: prompt,
+    max_output_tokens: 3000,
+    reasoning: { effort: "low" },
+    store: false,
+    text: { format: { type: "json_object" } },
+  };
+}
+
+export function openAiResponseText(body) {
+  if (!body || typeof body !== "object") throw new Error("OpenAI returned an invalid response body.");
+  const shortcut = typeof body.output_text === "string" ? body.output_text : "";
+  const itemText = Array.isArray(body.output)
+    ? body.output
+      .flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+      .filter((item) => item?.type === "output_text" && typeof item.text === "string")
+      .map((item) => item.text)
+      .join("")
+    : "";
+  const text = shortcut || itemText;
+  if (text.trim()) return text;
+  if (body.status === "incomplete") {
+    const reason = typeof body.incomplete_details?.reason === "string" ? body.incomplete_details.reason : "unknown reason";
+    throw new Error(`OpenAI response was incomplete (${reason}).`);
+  }
+  const outputTypes = Array.isArray(body.output)
+    ? body.output.map((item) => item?.type).filter(Boolean).join(", ") || "none"
+    : "none";
+  throw new Error(`OpenAI completed without output text (status: ${body.status || "unknown"}; output: ${outputTypes}).`);
+}
+
 async function openAi(model, apiKey, prompt) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ model, input: prompt, max_output_tokens: 1600, text: { format: { type: "json_object" } } }),
+    body: JSON.stringify(openAiRequestBody(model, prompt)),
     signal: AbortSignal.timeout(90_000),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error?.message || `OpenAI returned HTTP ${response.status}.`);
-  const text = body.output_text || body.output?.flatMap((item) => item.content || []).map((item) => item.text || "").join("") || "";
+  const text = openAiResponseText(body);
   return { text, inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null };
 }
 
