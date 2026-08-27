@@ -126,10 +126,16 @@ button:disabled { cursor:wait; opacity:.46; }
 .agent-card p { margin:7px 0; color:var(--muted); font:600 8px/1.5 monospace; }
 .agent-card small { display:block; margin:7px 0; color:#b42a16; overflow-wrap:anywhere; }
 .agent-card button { width:100%; border:1px solid var(--ink); padding:8px; font:900 8px monospace; cursor:pointer; }
+.agent-actions { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
 .agent-stop { background:transparent; }
 .agent-start { background:var(--acid); }
+.agent-edit { background:var(--cold); }
+.agent-remove { background:transparent; color:#a51e1e; }
+.agent-remove.confirm { background:var(--signal); color:var(--ink); }
+.agent-cancel { background:transparent; }
 .new-agent-trigger { width:100%; margin-top:10px; border:1px dashed var(--ink); background:transparent; padding:10px; font:900 8px monospace; cursor:pointer; }
 .agent-setup { margin-top:12px; padding-top:12px; border-top:4px solid var(--signal); }
+.agent-setup-title { margin-bottom:10px; font:900 8px/1.3 monospace; letter-spacing:.08em; }
 .agent-setup label { display:block; margin-top:10px; }
 .agent-setup label span { display:block; margin-bottom:4px; font:800 8px monospace; }
 .agent-setup input,.agent-setup textarea { width:100%; border:1px solid var(--ink); background:#f5f0e6; padding:8px; outline:none; font:600 9px/1.4 monospace; }
