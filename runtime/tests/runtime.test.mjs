@@ -19,6 +19,7 @@ import { normalizePolicy, policyAllows } from "../src/policy.mjs";
 import { Store } from "../src/db.mjs";
 import { createApi } from "../src/http-api.mjs";
 import { TechnocoreClient } from "../src/technocore.mjs";
+import { openAiRequestBody, openAiResponseText } from "../src/providers.mjs";
 
 test("Ed25519 DID signing and encrypted envelopes round trip", () => {
   const identity = generateIdentity();
@@ -87,6 +88,24 @@ test("source lookup supports Node multi-address callbacks without weakening SSRF
   assert.deepEqual(selectLookupResult(answers, 6), answers[1]);
   assert.throws(() => selectLookupResult([{ address: "127.0.0.1", family: 4 }], { all: true }));
   assert.throws(() => selectLookupResult([{ address: undefined, family: 4 }], { all: true }));
+});
+
+test("OpenAI responses preserve text items and diagnose incomplete output", () => {
+  const request = openAiRequestBody("gpt-5-mini", "Complete one signed task.");
+  assert.equal(request.reasoning.effort, "low");
+  assert.equal(request.max_output_tokens, 3000);
+  assert.equal(request.store, false);
+  assert.equal(openAiResponseText({
+    status: "completed",
+    output: [
+      { type: "reasoning", content: [] },
+      { type: "message", content: [{ type: "output_text", text: "{\"summary\":\"done\",\"evidence\":[]}" }] },
+    ],
+  }), "{\"summary\":\"done\",\"evidence\":[]}");
+  assert.throws(
+    () => openAiResponseText({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [{ type: "reasoning", content: [] }] }),
+    /incomplete.*max_output_tokens/i,
+  );
 });
 
 test("DID login creates a separate disabled operational agent", async (t) => {
