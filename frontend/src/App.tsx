@@ -166,6 +166,8 @@ export default function App() {
   const [relayPhase, setRelayPhase] = useState<RelayPhase>("idle");
   const [relayMessage, setRelayMessage] = useState("Ready to sign locally, then relay one real task to Technocore.");
   const [agentSetupOpen, setAgentSetupOpen] = useState(false);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [removeConfirmAgentId, setRemoveConfirmAgentId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [sources, setSources] = useState("");
@@ -230,8 +232,9 @@ export default function App() {
 
   useEffect(() => {
     if (!sessionToken) return;
-    const timer = window.setTimeout(() => void loadAgents(sessionToken, true), 0);
-    return () => window.clearTimeout(timer);
+    const initial = window.setTimeout(() => void loadAgents(sessionToken, true), 0);
+    const timer = window.setInterval(() => void loadAgents(sessionToken, true), 10_000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
   }, [loadAgents, sessionToken]);
 
   useEffect(() => {
@@ -398,26 +401,39 @@ export default function App() {
 
   async function createHostedAgent() {
     if (!identity || !sessionToken) return setNotice("Unlock the owner DID and connect agent control first.");
-    if (passphrase.length < 12) return setNotice("The operational recovery vault needs your 12+ character passphrase.");
+    if (!editingAgentId && passphrase.length < 12) return setNotice("The operational recovery vault needs your 12+ character passphrase.");
     if (apiKey.trim().length < 8) return setNotice("Enter a valid provider API key.");
     const allowlist = trustedRequesters.split(/[\n,\s]+/).map((item) => item.trim()).filter(Boolean);
     if (!allowlist.length) return setNotice("Add at least one trusted requester DID. Your owner DID is the safest start.");
     setBusy(true);
     try {
+      const policy = {
+        capabilities: ["web-research"],
+        allowedProofs: ["source-citations", "structured-json"],
+        allowedRequesterDids: allowlist,
+        maxTasksPerDay: 3,
+        maxSourcesPerTask: 3,
+        maxSourceChars: 60_000,
+      };
+      if (editingAgentId) {
+        const updated = await request<{ agent: HostedAgent }>(`/v1/agents/${editingAgentId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ provider, model: model.trim(), apiKey: apiKey.trim(), policy }),
+        }, sessionToken);
+        setAgents((prior) => prior.map((item) => item.id === updated.agent.id ? updated.agent : item));
+        setApiKey("");
+        setEditingAgentId(null);
+        setAgentSetupOpen(false);
+        setNotice("Agent provider, model and encrypted API key were updated. Start it when you are ready.");
+        return;
+      }
       const created = await request<{ agent: HostedAgent; recoveryKey: JsonWebKey; recoveryNotice: string }>("/v1/agents", {
         method: "POST",
         body: JSON.stringify({
           provider,
           model: model.trim(),
           apiKey: apiKey.trim(),
-          policy: {
-            capabilities: ["web-research"],
-            allowedProofs: ["source-citations", "structured-json"],
-            allowedRequesterDids: allowlist,
-            maxTasksPerDay: 3,
-            maxSourcesPerTask: 3,
-            maxSourceChars: 60_000,
-          },
+          policy,
         }),
       }, sessionToken);
       const operationalIdentity = await importIdentityFile(JSON.stringify(created.recoveryKey));
@@ -448,6 +464,53 @@ export default function App() {
       await syncNetwork(true);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Agent state could not be changed.");
+    } finally { setBusy(false); }
+  }
+
+  function openNewAgentSetup() {
+    if (agents.some((agent) => agent.enabled)) {
+      setNotice("Pause the current agent before creating another one, so two agents do not claim the same work.");
+      return;
+    }
+    setEditingAgentId(null);
+    setRemoveConfirmAgentId(null);
+    setProvider("openai");
+    setModel("gpt-5-mini");
+    setApiKey("");
+    setTrustedRequesters(identity?.did ?? "");
+    setAgentSetupOpen(true);
+  }
+
+  function openAgentEdit(agent: HostedAgent) {
+    if (agent.enabled) return setNotice("Pause the agent before changing its provider, model, or API key.");
+    setEditingAgentId(agent.id);
+    setRemoveConfirmAgentId(null);
+    setProvider(agent.provider);
+    setModel(agent.model);
+    setApiKey("");
+    setTrustedRequesters(agent.policy.allowedRequesterDids.join("\n"));
+    setAgentSetupOpen(true);
+    setNotice("Enter the replacement provider API key. The operational agent DID will stay the same.");
+  }
+
+  async function removeAgent(agent: HostedAgent) {
+    if (!sessionToken) return setNotice("Connect owner control first.");
+    if (agent.enabled) return setNotice("Pause the agent before removing it.");
+    if (removeConfirmAgentId !== agent.id) {
+      setRemoveConfirmAgentId(agent.id);
+      setNotice("Removal will erase this hosted agent's encrypted private key and provider key from active storage. Press CONFIRM REMOVE to continue.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await request<{ ok: true; agentId: string }>(`/v1/agents/${agent.id}`, { method: "DELETE" }, sessionToken);
+      setAgents((prior) => prior.filter((item) => item.id !== agent.id));
+      setRemoveConfirmAgentId(null);
+      if (editingAgentId === agent.id) { setEditingAgentId(null); setAgentSetupOpen(false); }
+      setNotice("Hosted agent removed. You can now configure a different provider, API key, or operational agent.");
+      await syncNetwork(true);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Agent could not be removed.");
     } finally { setBusy(false); }
   }
 
@@ -628,15 +691,21 @@ export default function App() {
                     <code>{shortDid(agent.did)}</code>
                     <p>Trusted: {agent.policy.allowedRequesterDids.map(shortDid).join(", ")}<br />Limit: {agent.policy.maxTasksPerDay}/day · {agent.policy.maxSourcesPerTask} sources</p>
                     {agent.lastError && <small>LAST ERROR · {agent.lastError}</small>}
-                    <button className={agent.enabled ? "agent-stop" : "agent-start"} onClick={() => void toggleAgent(agent)} disabled={busy}>{agent.enabled ? "PAUSE AGENT" : "START AGENT"}</button>
+                    <div className="agent-actions">
+                      <button className={agent.enabled ? "agent-stop" : "agent-start"} onClick={() => void toggleAgent(agent)} disabled={busy}>{agent.enabled ? "PAUSE AGENT" : "START AGENT"}</button>
+                      <button className="agent-edit" onClick={() => openAgentEdit(agent)} disabled={busy}>CHANGE API / MODEL</button>
+                      <button className={`agent-remove ${removeConfirmAgentId === agent.id ? "confirm" : ""}`} onClick={() => void removeAgent(agent)} disabled={busy}>{removeConfirmAgentId === agent.id ? "CONFIRM REMOVE" : "REMOVE AGENT"}</button>
+                      {removeConfirmAgentId === agent.id && <button className="agent-cancel" onClick={() => setRemoveConfirmAgentId(null)} disabled={busy}>CANCEL</button>}
+                    </div>
                   </div>
                 ))}
-                <button className="new-agent-trigger" onClick={() => setAgentSetupOpen((value) => !value)}>＋ NEW OPERATIONAL AGENT</button>
+                <button className="new-agent-trigger" onClick={() => agentSetupOpen && !editingAgentId ? setAgentSetupOpen(false) : openNewAgentSetup()}>＋ NEW OPERATIONAL AGENT</button>
               </>
             )}
 
             {sessionToken && agentSetupOpen && (
               <div className="agent-setup">
+                <div className="agent-setup-title">{editingAgentId ? "UPDATE EXISTING AGENT" : "CREATE NEW OPERATIONAL AGENT"}</div>
                 <div className="provider-row">
                   {(["openai", "anthropic", "gemini"] as Provider[]).map((item) => <button key={item} className={provider === item ? "active" : ""} onClick={() => setProvider(item)}>{item}</button>)}
                 </div>
@@ -644,7 +713,7 @@ export default function App() {
                 <label><span>PROVIDER API KEY</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /></label>
                 <label><span>TRUSTED REQUESTER DID(S)</span><textarea value={trustedRequesters} onChange={(event) => setTrustedRequesters(event.target.value)} /></label>
                 <div className="policy-ticket"><b>FIXED SAFE POLICY</b><span>web research only</span><span>source/JSON proof</span><span>3 tasks/day</span><span>no auto-accept</span></div>
-                <button className="host-agent" onClick={() => void createHostedAgent()} disabled={busy}>ENCRYPT + HOST AGENT →</button>
+                <button className="host-agent" onClick={() => void createHostedAgent()} disabled={busy}>{editingAgentId ? "ENCRYPT + UPDATE AGENT →" : "ENCRYPT + HOST AGENT →"}</button>
               </div>
             )}
           </section>
