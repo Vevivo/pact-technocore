@@ -43,7 +43,8 @@ export class Store {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_active_at TEXT,
-        last_error TEXT
+        last_error TEXT,
+        deleted_at TEXT
       );
       CREATE INDEX IF NOT EXISTS agents_owner ON agents(owner_did, created_at);
 
@@ -96,6 +97,10 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log(created_at);
     `);
+    const agentColumns = this.db.prepare("PRAGMA table_info(agents)").all();
+    if (!agentColumns.some((column) => column.name === "deleted_at")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN deleted_at TEXT");
+    }
   }
 
   close() { this.db.close(); }
@@ -145,15 +150,15 @@ export class Store {
   }
 
   agentsForOwner(ownerDid) {
-    return this.db.prepare("SELECT * FROM agents WHERE owner_did=? ORDER BY created_at DESC").all(ownerDid);
+    return this.db.prepare("SELECT * FROM agents WHERE owner_did=? AND deleted_at IS NULL ORDER BY created_at DESC").all(ownerDid);
   }
 
   enabledAgents() {
-    return this.db.prepare("SELECT * FROM agents WHERE enabled=1 ORDER BY created_at ASC").all();
+    return this.db.prepare("SELECT * FROM agents WHERE enabled=1 AND deleted_at IS NULL ORDER BY created_at ASC").all();
   }
 
   agentForOwner(id, ownerDid) {
-    return this.db.prepare("SELECT * FROM agents WHERE id=? AND owner_did=?").get(id, ownerDid) || null;
+    return this.db.prepare("SELECT * FROM agents WHERE id=? AND owner_did=? AND deleted_at IS NULL").get(id, ownerDid) || null;
   }
 
   agentById(id) {
@@ -176,6 +181,16 @@ export class Store {
   markAgentActivity(id, error = null) {
     const now = new Date().toISOString();
     this.db.prepare("UPDATE agents SET last_active_at=?,last_error=?,updated_at=? WHERE id=?").run(now, error, now, id);
+  }
+
+  deleteAgent(id, ownerDid) {
+    const row = this.agentForOwner(id, ownerDid);
+    if (!row) return null;
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`UPDATE agents SET
+      enabled=0,private_key_enc='deleted',api_key_enc='deleted',last_error=NULL,updated_at=?,deleted_at=?
+      WHERE id=? AND owner_did=? AND deleted_at IS NULL`).run(now, now, id, ownerDid);
+    return result.changes === 1 ? { id, did: row.did, provider: row.provider, model: row.model, deletedAt: now } : null;
   }
 
   insertRoomEvent(room, message, event) {
@@ -238,8 +253,8 @@ export class Store {
 
   stats(room) {
     const eventCount = Number(this.db.prepare("SELECT COUNT(*) AS count FROM room_events WHERE room=?").get(room)?.count || 0);
-    const agentCount = Number(this.db.prepare("SELECT COUNT(*) AS count FROM agents").get()?.count || 0);
-    const onlineAgents = Number(this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE enabled=1").get()?.count || 0);
+    const agentCount = Number(this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE deleted_at IS NULL").get()?.count || 0);
+    const onlineAgents = Number(this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE enabled=1 AND deleted_at IS NULL").get()?.count || 0);
     const submitted = Number(this.db.prepare("SELECT COUNT(*) AS count FROM executions WHERE status='submitted'").get()?.count || 0);
     return { eventCount, agentCount, onlineAgents, submitted };
   }
