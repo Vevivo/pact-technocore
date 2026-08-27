@@ -246,15 +246,20 @@ export function createApi(config, store, technocore, logger) {
       }
       if (request.method === "POST" && url.pathname === "/v1/messages") {
         const input = await body(request);
-        await technocore.postEnvelope(input);
+        try {
+          await technocore.postEnvelope(input);
+        } catch (error) {
+          logger("warn", "Technocore relay rejected or timed out", { requestId, error: error.message });
+          throw new HttpError(502, "Technocore did not acknowledge the signed task. Check network status before retrying.");
+        }
         store.audit("message.relayed", input.did, config.room, { nonce: input.nonce });
-        json(response, 201, { ok: true, room: config.room, lastSeq: store.lastRoomSeq(config.room) }, headers);
+        json(response, 201, { ok: true, relay: "acknowledged", room: config.room, lastSeq: store.lastRoomSeq(config.room) }, headers);
         return;
       }
       throw new HttpError(404, "Route not found.");
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      const message = status >= 500 ? "Internal service error." : error.message;
+      const message = error instanceof HttpError ? error.message : "Internal service error.";
       if (status >= 500) logger("error", "HTTP request failed", { requestId, error: error.message });
       json(response, status, { error: message, requestId }, headers);
     } finally {

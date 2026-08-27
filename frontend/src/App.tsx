@@ -24,10 +24,12 @@ const ROOM = import.meta.env.VITE_PACT_ROOM || "mb-pact-work-v1";
 const VAULT_KEY = "pact.vault.v1";
 const RECEIPTS_KEY = "pact.receipts.v1";
 const SESSION_KEY = "pact.session.v1";
+const REQUEST_TIMEOUT_MS = 25_000;
 let lastNonce = 0;
 const nextNonce = () => (lastNonce = Math.max(Date.now(), lastNonce + 1));
 
 type Provider = "openai" | "anthropic" | "gemini";
+type RelayPhase = "idle" | "signing" | "relaying" | "success" | "error";
 type NetworkSnapshot = {
   version: string;
   room: string;
@@ -95,15 +97,31 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string |
   headers.set("accept", "application/json");
   if (init.body) headers.set("content-type", "application/json");
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers, cache: "no-store" });
-  const raw = await response.text();
-  let body: unknown = {};
-  try { body = raw ? JSON.parse(raw) : {}; } catch { body = { error: raw }; }
-  if (!response.ok) {
-    const message = typeof body === "object" && body && "error" in body ? String(body.error) : `PACT API HTTP ${response.status}`;
-    throw new Error(message);
+  const timeout = new AbortController();
+  const timeoutId = window.setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+  const externalSignal = init.signal;
+  const abortFromCaller = () => timeout.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  try {
+    const response = await fetch(`${API_BASE}${path}`, { ...init, headers, cache: "no-store", signal: timeout.signal });
+    const raw = await response.text();
+    let body: unknown = {};
+    try { body = raw ? JSON.parse(raw) : {}; } catch { body = { error: raw }; }
+    if (!response.ok) {
+      const message = typeof body === "object" && body && "error" in body ? String(body.error) : `PACT API HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return body as T;
+  } catch (error) {
+    if (timeout.signal.aborted && !externalSignal?.aborted) {
+      throw new Error("Relay confirmation timed out. Sync the task list before trying again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
-  return body as T;
 }
 
 function publicSource(value: string) {
@@ -145,6 +163,8 @@ export default function App() {
   const [agents, setAgents] = useState<HostedAgent[]>([]);
   const [notice, setNotice] = useState("Connecting to the live PACT runtime.");
   const [composerOpen, setComposerOpen] = useState(false);
+  const [relayPhase, setRelayPhase] = useState<RelayPhase>("idle");
+  const [relayMessage, setRelayMessage] = useState("Ready to sign locally, then relay one real task to Technocore.");
   const [agentSetupOpen, setAgentSetupOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
@@ -157,6 +177,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -212,6 +233,15 @@ export default function App() {
     const timer = window.setTimeout(() => void loadAgents(sessionToken, true), 0);
     return () => window.clearTimeout(timer);
   }, [loadAgents, sessionToken]);
+
+  useEffect(() => {
+    if (!composerOpen) return;
+    const timer = window.setTimeout(() => composerRef.current?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    }), 0);
+    return () => window.clearTimeout(timer);
+  }, [composerOpen]);
 
   const selectedTask = useMemo(
     () => tasks.find((item) => item.task.id === selectedTaskId) ?? tasks[0] ?? null,
@@ -289,11 +319,29 @@ export default function App() {
     } finally { setBusy(false); }
   }
 
-  async function publishEvent(event: PactEvent) {
+  function relayFailure(message: string) {
+    setRelayPhase("error");
+    setRelayMessage(message);
+    setNotice(message);
+  }
+
+  function toggleComposer() {
+    setComposerOpen((open) => {
+      if (!open) {
+        setRelayPhase("idle");
+        setRelayMessage("Ready to sign locally, then relay one real task to Technocore.");
+      }
+      return !open;
+    });
+  }
+
+  async function publishEvent(event: PactEvent, progress?: (phase: "signing" | "relaying") => void) {
     if (!identity) throw new Error("Unlock an owner DID before signing.");
     const text = encodePactMessage(event);
     const nonce = nextNonce();
+    progress?.("signing");
     const sig = await signRoomMessage(identity.privateKey, ROOM, nonce, text);
+    progress?.("relaying");
     const result = await request<{ ok: true; room: string; lastSeq: number }>("/v1/messages", {
       method: "POST", body: JSON.stringify({ did: identity.did, sig, nonce, text }),
     });
@@ -307,16 +355,16 @@ export default function App() {
   }
 
   async function publishTask() {
-    if (!identity) return setNotice("Unlock or import an owner DID before publishing a task.");
-    if (title.trim().length < 4 || brief.trim().length < 20) return setNotice("Use a clear title and a brief of at least 20 characters.");
+    if (!identity) return relayFailure("Unlock or import an owner DID before publishing a task.");
+    if (title.trim().length < 4 || brief.trim().length < 20) return relayFailure("Use a clear title and a brief of at least 20 characters.");
     const sourceList = sources.split(/\s+/).map((value) => value.trim()).filter(Boolean).slice(0, 3);
-    if (!sourceList.length) return setNotice("Autonomous PACT tasks require at least one public source URL.");
+    if (!sourceList.length) return relayFailure("Autonomous PACT tasks require at least one public source URL.");
     try {
       for (const source of sourceList) {
         const url = new URL(source);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
       }
-    } catch { return setNotice("Every source must be a complete public HTTP(S) URL."); }
+    } catch { return relayFailure("Every source must be a complete public HTTP(S) URL."); }
     setBusy(true);
     const task: PactTask = {
       pact: 1,
@@ -331,13 +379,20 @@ export default function App() {
       settlement: "not-available",
     };
     try {
-      await publishEvent(task);
-      setTitle(""); setBrief(""); setSources(""); setComposerOpen(false);
+      await publishEvent(task, (phase) => {
+        setRelayPhase(phase);
+        setRelayMessage(phase === "signing"
+          ? "Signing this task with the unlocked owner DID on this device."
+          : "Signature complete. Waiting for Technocore to acknowledge the relay.");
+      });
+      setTitle(""); setBrief(""); setSources("");
       setSelectedTaskId(task.id);
+      setRelayPhase("success");
+      setRelayMessage("Confirmed: the signed task was accepted by the Technocore relay.");
       setNotice("Real task signed and relayed to Technocore. No reward or settlement was promised.");
       window.setTimeout(() => void syncNetwork(true), 1_500);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Task publication failed.");
+      relayFailure(error instanceof Error ? error.message : "Task publication failed.");
     } finally { setBusy(false); }
   }
 
@@ -453,22 +508,32 @@ export default function App() {
               <span className="section-kicker">TECHNOCORE-NATIVE AGENT WORK EXCHANGE</span>
               <h1>Work enters as a pact. Agents leave proof.</h1>
             </div>
-            <button className="create-trigger" onClick={() => setComposerOpen((value) => !value)}><span>＋</span>POST<br />REAL WORK</button>
+            <button className="create-trigger" onClick={toggleComposer}><span>{composerOpen ? "×" : "＋"}</span>{composerOpen ? "CLOSE" : <>POST<br />REAL WORK</>}</button>
           </div>
 
           {composerOpen && (
-            <div className="task-composer">
+            <div className="task-composer" ref={composerRef}>
               <label><span>TASK TITLE</span><input value={title} maxLength={80} onChange={(event) => setTitle(event.target.value)} placeholder="Verify an official release" /></label>
               <label><span>PUBLIC SOURCES · MAX 3</span><textarea value={sources} onChange={(event) => setSources(event.target.value)} placeholder={'https://official.example/page\nhttps://docs.example/release'} /></label>
               <label className="wide-field"><span>WORK BRIEF</span><textarea value={brief} maxLength={1200} onChange={(event) => setBrief(event.target.value)} placeholder="State exactly what the agent must inspect and return. Do not ask it to invent facts." /></label>
-              <fieldset className="proof-choices wide-field">
-                <legend>PROOF CONTRACT</legend>
+              <div className="proof-choices wide-field">
+                <span className="proof-label">PROOF CONTRACT</span>
                 <button className={proof === "source-citations" ? "active" : ""} onClick={() => setProof("source-citations")}>SOURCE + SHA-256</button>
                 <button className={proof === "structured-json" ? "active" : ""} onClick={() => setProof("structured-json")}>STRUCTURED JSON</button>
-              </fieldset>
+              </div>
+              <div className={`composer-status relay-${relayPhase} wide-field`} role={relayPhase === "error" ? "alert" : "status"} aria-live="polite">
+                <div className="relay-steps" aria-hidden="true">
+                  <span className={relayPhase === "signing" ? "active" : ["relaying", "success"].includes(relayPhase) ? "done" : ""}>01 SIGN</span>
+                  <span className={relayPhase === "relaying" ? "active" : relayPhase === "success" ? "done" : ""}>02 RELAY</span>
+                  <span className={relayPhase === "success" ? "done" : ""}>03 CONFIRM</span>
+                </div>
+                <p>{relayMessage}</p>
+              </div>
               <div className="composer-foot">
                 <p>CAPABILITY: WEB-RESEARCH · SETTLEMENT: NOT AVAILABLE · NO REWARD CLAIM</p>
-                <button onClick={() => void publishTask()} disabled={busy}>SIGN + RELAY →</button>
+                <button onClick={() => void publishTask()} disabled={busy || relayPhase === "success"}>
+                  {relayPhase === "signing" ? "SIGNING LOCALLY…" : relayPhase === "relaying" ? "RELAYING…" : relayPhase === "success" ? "RELAYED ✓" : relayPhase === "error" ? "RETRY SIGN + RELAY →" : "SIGN + RELAY →"}
+                </button>
               </div>
             </div>
           )}

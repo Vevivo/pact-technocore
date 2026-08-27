@@ -17,10 +17,11 @@ function messageValid(room, message) {
 }
 
 export class TechnocoreClient {
-  constructor(config, store, logger) {
+  constructor(config, store, logger, fetchImpl = fetch) {
     this.config = config;
     this.store = store;
     this.logger = logger;
+    this.fetch = fetchImpl;
     this.running = false;
     this.abort = null;
   }
@@ -38,10 +39,12 @@ export class TechnocoreClient {
     const search = since > 0
       ? { format: "json", since, wait: Math.min(10, wait), limit: 200 }
       : { format: "json", limit: 200 };
-    const response = await fetch(this.roomUrl(search), {
+    const timeout = AbortSignal.timeout((Math.max(0, wait) + 15) * 1000);
+    const signal = this.abort?.signal ? AbortSignal.any([this.abort.signal, timeout]) : timeout;
+    const response = await this.fetch(this.roomUrl(search), {
       headers: { accept: "application/json", "user-agent": `PACT-Runtime/${this.config.version}` },
       cache: "no-store",
-      signal: this.abort?.signal,
+      signal,
     });
     if (!response.ok) throw new Error(`Technocore read HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
     const body = await response.json();
@@ -68,7 +71,7 @@ export class TechnocoreClient {
     }
     if (!decodeEvent(text)) throw new Error("Only valid PACT events can be relayed.");
     if (!verifyDidSignature(did, `${this.config.room}|${nonce}|${text}`, sig)) throw new Error("DID signature did not verify.");
-    const response = await fetch(this.roomUrl(), {
+    const response = await this.fetch(this.roomUrl(), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "user-agent": `PACT-Runtime/${this.config.version}` },
       body: JSON.stringify({ did, sig, nonce, text }),
@@ -76,7 +79,6 @@ export class TechnocoreClient {
     });
     const body = await response.text();
     if (!response.ok) throw new Error(`Technocore write HTTP ${response.status}: ${body.slice(0, 300)}`);
-    await this.syncOnce();
     return body;
   }
 

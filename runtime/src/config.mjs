@@ -43,7 +43,7 @@ const dataDir = resolve(process.env.DATA_DIR || "./data");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
 export const config = Object.freeze({
-  version: "0.2.0",
+  version: "0.2.1",
   port: integer("PORT", 8793, 1024, 65535),
   dataDir,
   databasePath: resolve(dataDir, "pact.sqlite"),

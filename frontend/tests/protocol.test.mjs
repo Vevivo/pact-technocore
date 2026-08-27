@@ -4,7 +4,7 @@ import { createServer } from "vite";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const vite = await createServer({ appType: "custom", configFile: false, root, server: { middlewareMode: true } });
+const vite = await createServer({ appType: "custom", configFile: false, root, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true } });
 after(async () => vite.close());
 
 test("PACT/1 task messages round-trip as a single line", async () => {
@@ -32,4 +32,18 @@ test("rejects malformed or imaginary-settlement messages", async () => {
 test("the interface declares reduced-motion behavior", async () => {
   const css = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../src/styles.css", import.meta.url), "utf8"));
   assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
+test("the task composer exposes relay progress and an inline failure state", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, css] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /01 SIGN/);
+  assert.match(app, /02 RELAY/);
+  assert.match(app, /03 CONFIRM/);
+  assert.match(app, /Relay confirmation timed out/);
+  assert.match(css, /composer-status\.relay-error/);
+  assert.doesNotMatch(app, /<fieldset className="proof-choices/);
 });

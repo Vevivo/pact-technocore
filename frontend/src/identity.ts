@@ -42,7 +42,7 @@ export async function generateIdentity(): Promise<Identity> {
   const [privateJwk, publicJwk] = await Promise.all([crypto.subtle.exportKey("jwk", pair.privateKey), crypto.subtle.exportKey("jwk", pair.publicKey)]);
   return { did: didFromPublicJwk(publicJwk), privateKey: pair.privateKey, publicJwk, privateJwk };
 }
-async function deriveVaultKey(passphrase: string, salt: Uint8Array, iterations: number) {
+async function deriveVaultKey(passphrase: string, salt: BufferSource, iterations: number) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }

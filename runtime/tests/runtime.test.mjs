@@ -18,6 +18,7 @@ import { isPrivateAddress } from "../src/source-reader.mjs";
 import { normalizePolicy, policyAllows } from "../src/policy.mjs";
 import { Store } from "../src/db.mjs";
 import { createApi } from "../src/http-api.mjs";
+import { TechnocoreClient } from "../src/technocore.mjs";
 
 test("Ed25519 DID signing and encrypted envelopes round trip", () => {
   const identity = generateIdentity();
@@ -121,6 +122,31 @@ test("DID login creates a separate disabled operational agent", async (t) => {
     method: "POST", headers: { "content-type": "application/json", origin: "https://pact_example.ar.io" }, body: JSON.stringify({ did: outsider.did }),
   });
   assert.equal(denied.status, 403);
+});
+
+test("a successful Technocore write returns without waiting for an archive read", async () => {
+  const identity = generateIdentity();
+  const event = newEvent("task", {
+    title: "Verify relay acknowledgement",
+    brief: "Confirm that a successful write does not block on a second archive request.",
+    sources: ["https://example.com"], proof: "source-citations", capability: "web-research", settlement: "not-available",
+  });
+  const room = "mb-pact-work-v1";
+  const nonce = Date.now();
+  const text = encodeEvent(event);
+  const sig = signWithJwk(identity.privateJwk, `${room}|${nonce}|${text}`);
+  const calls = [];
+  const client = new TechnocoreClient(
+    { room, technocoreBase: "https://technocore.example", version: "test" },
+    { lastRoomSeq: () => 0 },
+    () => {},
+    async (url, init) => {
+      calls.push({ url: String(url), method: init.method });
+      return new Response('{"ok":true}', { status: 201, headers: { "content-type": "application/json" } });
+    },
+  );
+  await client.postEnvelope({ did: identity.did, sig, nonce, text });
+  assert.deepEqual(calls.map((call) => call.method), ["POST"]);
 });
 
 function row(seq, author, event) {
