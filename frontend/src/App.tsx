@@ -244,7 +244,7 @@ export default function App() {
   }, [composerOpen]);
 
   const selectedTask = useMemo(
-    () => tasks.find((item) => item.task.id === selectedTaskId) ?? tasks[0] ?? null,
+    () => selectedTaskId ? tasks.find((item) => item.task.id === selectedTaskId) ?? null : null,
     [tasks, selectedTaskId],
   );
 
@@ -545,18 +545,27 @@ export default function App() {
                 <strong>NO PACT TASKS ON THIS FREQUENCY</strong>
                 <p>The runtime is live. Zero records means zero records—nothing is fabricated.</p>
               </div>
-            ) : tasks.map((item, index) => (
-              <button key={item.task.id} className={`task-slip ${selectedTask?.task.id === item.task.id ? "selected" : ""}`} onClick={() => setSelectedTaskId(item.task.id)}>
-                <span className="task-index">{String(index + 1).padStart(2, "0")}</span>
-                <span className="task-copy"><small>{shortDid(item.author)} · {shortTime(item.ts)}</small><strong>{item.task.title}</strong><em>{item.status} · {item.task.sources.length} source{item.task.sources.length === 1 ? "" : "s"}</em></span>
-                <span className="task-proof">{item.task.proof.replaceAll("-", " ")}</span>
-                <span className="task-arrow">↗</span>
-              </button>
-            ))}
+            ) : tasks.map((item, index) => {
+              const expanded = selectedTask?.task.id === item.task.id;
+              return (
+                <button
+                  key={item.task.id}
+                  className={`task-slip ${expanded ? "selected" : ""}`}
+                  onClick={() => setSelectedTaskId((current) => current === item.task.id ? null : item.task.id)}
+                  aria-expanded={expanded}
+                  aria-controls={`task-detail-${item.task.id}`}
+                >
+                  <span className="task-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="task-copy"><small>{shortDid(item.author)} · {shortTime(item.ts)}</small><strong>{item.task.title}</strong><em>{item.status} · {item.task.sources.length} source{item.task.sources.length === 1 ? "" : "s"}</em></span>
+                  <span className="task-proof">{item.task.proof.replaceAll("-", " ")}</span>
+                  <span className={`task-arrow ${expanded ? "expanded" : ""}`} aria-hidden="true">⌄</span>
+                </button>
+              );
+            })}
           </div>
 
           {selectedTask && (
-            <article className="task-detail">
+            <article className="task-detail" id={`task-detail-${selectedTask.task.id}`}>
               <span className="detail-stamp">{selectedTask.status.toUpperCase()}</span>
               <div className="detail-main">
                 <span className="section-kicker">TASK {selectedTask.task.id} / SEQ {selectedTask.seq}</span>
