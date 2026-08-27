@@ -1,0 +1,132 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  generateIdentity,
+  open,
+  seal,
+  signWithJwk,
+  verifyDidSignature,
+  publicJwkFromDid,
+} from "../src/crypto.mjs";
+import { decodeEvent, encodeEvent, newEvent } from "../src/protocol.mjs";
+import { buildTaskViews } from "../src/tasks.mjs";
+import { isPrivateAddress } from "../src/source-reader.mjs";
+import { normalizePolicy, policyAllows } from "../src/policy.mjs";
+import { Store } from "../src/db.mjs";
+import { createApi } from "../src/http-api.mjs";
+
+test("Ed25519 DID signing and encrypted envelopes round trip", () => {
+  const identity = generateIdentity();
+  assert.equal(publicJwkFromDid(identity.did).x, identity.publicJwk.x);
+  const signature = signWithJwk(identity.privateJwk, "PACT test payload");
+  assert.equal(verifyDidSignature(identity.did, "PACT test payload", signature), true);
+  assert.equal(verifyDidSignature(identity.did, "tampered", signature), false);
+  const key = randomBytes(32);
+  const encrypted = seal(key, "provider-secret", "test");
+  assert.equal(open(key, encrypted, "test"), "provider-secret");
+  assert.throws(() => open(key, encrypted, "wrong-purpose"));
+});
+
+test("PACT protocol accepts explicit real-work events and rejects fake settlement", () => {
+  const task = newEvent("task", {
+    title: "Inspect official source",
+    brief: "Read the supplied source and return a concise evidence-backed result.",
+    sources: ["https://example.com/"],
+    proof: "source-citations",
+    capability: "web-research",
+    settlement: "not-available",
+  });
+  assert.deepEqual(decodeEvent(encodeEvent(task)), task);
+  assert.throws(() => encodeEvent({ ...task, settlement: "100-flop" }));
+});
+
+test("task state uses Technocore seq order and requester-only decisions", () => {
+  const task = newEvent("task", {
+    title: "Verify one source",
+    brief: "Read the source, hash its raw response, and summarize only verified facts.",
+    sources: ["https://example.com"], proof: "source-citations", capability: "web-research", settlement: "not-available",
+  });
+  const claim = newEvent("claim", { taskId: task.id, leaseSeconds: 600 });
+  const submission = newEvent("submission", { taskId: task.id, claimId: claim.id, summary: "done", evidence: ["https://example.com/#sha256=abc"], model: "openai:test" });
+  const badDecision = newEvent("decision", { taskId: task.id, submissionId: submission.id, verdict: "accepted" });
+  const goodDecision = newEvent("decision", { taskId: task.id, submissionId: submission.id, verdict: "accepted" });
+  const rows = [
+    row(1, "did:key:requester", task), row(2, "did:key:worker", claim), row(3, "did:key:worker", submission),
+    row(4, "did:key:stranger", badDecision), row(5, "did:key:requester", goodDecision),
+  ];
+  const [view] = buildTaskViews(rows, Date.parse("2026-08-27T00:05:00Z"));
+  assert.equal(view.status, "accepted");
+  assert.equal(view.decision.author, "did:key:requester");
+  assert.equal(view.activeClaim.author, "did:key:worker");
+});
+
+test("agent policies are deny-by-default and source fetch blocks private networks", () => {
+  const policy = normalizePolicy({});
+  assert.deepEqual(policy.allowedRequesterDids, []);
+  assert.equal(policyAllows(policy, { status: "open", author: "did:key:any", task: { capability: "web-research", proof: "source-citations", sources: ["https://example.com"], settlement: "not-available" } }), false);
+  assert.equal(isPrivateAddress("127.0.0.1"), true);
+  assert.equal(isPrivateAddress("10.2.3.4"), true);
+  assert.equal(isPrivateAddress("169.254.1.1"), true);
+  assert.equal(isPrivateAddress("::1"), true);
+  assert.equal(isPrivateAddress("8.8.8.8"), false);
+  assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
+});
+
+test("DID login creates a separate disabled operational agent", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "pact-test-"));
+  const store = new Store(join(directory, "test.sqlite"));
+  const owner = generateIdentity();
+  const config = {
+    version: "test", room: "mb-pact-work-v1", masterKey: randomBytes(32), sessionTtlMs: 3_600_000,
+    publicOrigins: new Set(["https://pact_example.ar.io"]), allowedOwnerDids: new Set([owner.did]), arnsUndername: "pact_example",
+  };
+  store.setState("technocore_last_sync", new Date().toISOString());
+  const relayed = [];
+  const api = createApi(config, store, { postEnvelope: async (value) => relayed.push(value) }, () => {});
+  await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => api.close(resolve));
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${api.address().port}`;
+  const challengeResponse = await fetch(`${base}/v1/auth/challenge`, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://pact_example.ar.io" }, body: JSON.stringify({ did: owner.did }),
+  });
+  assert.equal(challengeResponse.status, 201);
+  const challenge = await challengeResponse.json();
+  const loginResponse = await fetch(`${base}/v1/auth/verify`, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://pact_example.ar.io" },
+    body: JSON.stringify({ challengeId: challenge.challengeId, did: owner.did, signature: signWithJwk(owner.privateJwk, challenge.statement) }),
+  });
+  assert.equal(loginResponse.status, 200);
+  const login = await loginResponse.json();
+  const createResponse = await fetch(`${base}/v1/agents`, {
+    method: "POST", headers: { authorization: `Bearer ${login.token}`, "content-type": "application/json", origin: "https://pact_example.ar.io" },
+    body: JSON.stringify({ provider: "openai", model: "gpt-5-mini", apiKey: "test-provider-key", policy: {} }),
+  });
+  assert.equal(createResponse.status, 201);
+  const created = await createResponse.json();
+  assert.equal(created.agent.ownerDid, owner.did);
+  assert.notEqual(created.agent.did, owner.did);
+  assert.equal(created.agent.enabled, false);
+  assert.equal(created.recoveryKey.crv, "Ed25519");
+
+  const outsider = generateIdentity();
+  const denied = await fetch(`${base}/v1/auth/challenge`, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://pact_example.ar.io" }, body: JSON.stringify({ did: outsider.did }),
+  });
+  assert.equal(denied.status, 403);
+});
+
+function row(seq, author, event) {
+  return {
+    room: "mb-pact-work-v1", seq, ts: `2026-08-27T00:0${seq}:00Z`, author_did: author,
+    nonce: seq, event_id: event.id, kind: event.kind, task_id: event.kind === "task" ? event.id : event.taskId,
+    payload_json: JSON.stringify(event), received_at: "2026-08-27T00:10:00Z",
+  };
+}

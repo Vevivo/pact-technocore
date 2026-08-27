@@ -1,0 +1,27 @@
+services:
+  pact-runtime:
+    build:
+      context: .
+    container_name: pact-runtime
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8793:8793"
+    volumes:
+      - pact-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 128
+
+volumes:
+  pact-data:
+    name: pact-data
