@@ -14,7 +14,7 @@ import {
 } from "../src/crypto.mjs";
 import { decodeEvent, encodeEvent, newEvent } from "../src/protocol.mjs";
 import { buildTaskViews } from "../src/tasks.mjs";
-import { isPrivateAddress } from "../src/source-reader.mjs";
+import { isPrivateAddress, selectLookupResult } from "../src/source-reader.mjs";
 import { normalizePolicy, policyAllows } from "../src/policy.mjs";
 import { Store } from "../src/db.mjs";
 import { createApi } from "../src/http-api.mjs";
@@ -75,6 +75,18 @@ test("agent policies are deny-by-default and source fetch blocks private network
   assert.equal(isPrivateAddress("::1"), true);
   assert.equal(isPrivateAddress("8.8.8.8"), false);
   assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
+});
+
+test("source lookup supports Node multi-address callbacks without weakening SSRF checks", () => {
+  const answers = [
+    { address: "8.8.8.8", family: 4 },
+    { address: "2606:4700:4700::1111", family: 6 },
+  ];
+  assert.deepEqual(selectLookupResult(answers, { all: true }), answers);
+  assert.deepEqual(selectLookupResult(answers, { family: 4 }), answers[0]);
+  assert.deepEqual(selectLookupResult(answers, 6), answers[1]);
+  assert.throws(() => selectLookupResult([{ address: "127.0.0.1", family: 4 }], { all: true }));
+  assert.throws(() => selectLookupResult([{ address: undefined, family: 4 }], { all: true }));
 });
 
 test("DID login creates a separate disabled operational agent", async (t) => {
