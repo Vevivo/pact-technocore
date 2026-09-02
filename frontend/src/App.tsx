@@ -26,7 +26,7 @@ const RECEIPTS_KEY = "pact.receipts.v1";
 const SESSION_KEY = "pact.session.v1";
 const REQUEST_TIMEOUT_MS = 25_000;
 let lastNonce = 0;
-const nextNonce = () => (lastNonce = Math.max(Date.now(), lastNonce + 1));
+const nextNonce = () => String(lastNonce = Math.max(Date.now(), lastNonce + 1));
 
 type Provider = "openai" | "anthropic" | "gemini";
 type RelayPhase = "idle" | "signing" | "relaying" | "success" | "error";
