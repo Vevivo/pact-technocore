@@ -205,6 +205,9 @@ test("a successful Technocore write returns without waiting for an archive read"
   }), true);
   assert.equal(messageValid(room, {
     seq: 1, ts: new Date().toISOString(), from: identity.did, nonce: Number(nonce), text,
+  }), true);
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce: 0, text,
   }), false);
 });
 
