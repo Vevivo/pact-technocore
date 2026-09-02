@@ -1,10 +1,16 @@
 import { decodeEvent, encodeEvent, singleLine } from "./protocol.mjs";
 import { signWithJwk, verifyDidSignature } from "./crypto.mjs";
 
+const NONCE_PATTERN = /^[1-9]\d{0,18}$/;
+
+function nonceValid(value) {
+  return typeof value === "string" && NONCE_PATTERN.test(value);
+}
+
 function messageValid(room, message) {
   if (!message || !Number.isSafeInteger(message.seq) || message.seq < 1) return false;
   if (typeof message.ts !== "string" || Number.isNaN(Date.parse(message.ts))) return false;
-  if (typeof message.from !== "string" || !Number.isSafeInteger(message.nonce) || message.nonce < 1) return false;
+  if (typeof message.from !== "string" || !nonceValid(message.nonce)) return false;
   if (typeof message.text !== "string" || message.text !== singleLine(message.text)) return false;
   // Technocore verifies the signature before storing a did:key author, but its
   // read API intentionally returns the DID and nonce without returning `sig`.
@@ -66,7 +72,7 @@ export class TechnocoreClient {
 
   async postEnvelope(envelope) {
     const { did, sig, nonce, text } = envelope || {};
-    if (!Number.isSafeInteger(nonce) || nonce < 1 || typeof text !== "string" || text !== singleLine(text)) {
+    if (!nonceValid(nonce) || typeof text !== "string" || text !== singleLine(text)) {
       throw new Error("Invalid signed message envelope.");
     }
     if (!decodeEvent(text)) throw new Error("Only valid PACT events can be relayed.");
@@ -85,8 +91,10 @@ export class TechnocoreClient {
   async publish(privateJwk, did, event) {
     const text = encodeEvent(event);
     const stateKey = `nonce:${did}:${this.config.room}`;
-    const previous = Number(this.store.state(stateKey)?.value || 0);
-    const nonce = Math.max(Date.now(), previous + 1);
+    let previous = 0n;
+    try { previous = BigInt(this.store.state(stateKey)?.value || "0"); } catch { /* reset an invalid local counter */ }
+    const now = BigInt(Date.now());
+    const nonce = (now > previous ? now : previous + 1n).toString();
     this.store.setState(stateKey, nonce);
     const sig = signWithJwk(privateJwk, `${this.config.room}|${nonce}|${text}`);
     await this.postEnvelope({ did, sig, nonce, text });
