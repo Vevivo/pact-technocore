@@ -26,7 +26,7 @@ const RECEIPTS_KEY = "pact.receipts.v1";
 const SESSION_KEY = "pact.session.v1";
 const REQUEST_TIMEOUT_MS = 25_000;
 let lastNonce = 0;
-const nextNonce = () => (lastNonce = Math.max(Date.now(), lastNonce + 1));
+const nextNonce = () => String(lastNonce = Math.max(Date.now(), lastNonce + 1));
 
 type Provider = "openai" | "anthropic" | "gemini";
 type RelayPhase = "idle" | "signing" | "relaying" | "success" | "error";
@@ -547,7 +547,18 @@ export default function App() {
       <div className="status-strip">
         <span>LIVE RUNTIME / {network?.version ?? "—"}</span>
         <p>{notice}</p>
-        <span>ROOM {ROOM} · SEQ {network?.lastSeq ?? 0} · AGENTS {network?.onlineAgents ?? 0}</span>
+        <span>
+          ROOM{" "}
+          <a
+            href={`https://technocore.chat/humans#r/${encodeURIComponent(ROOM)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open Technocore room ${ROOM}`}
+          >
+            {ROOM}
+          </a>
+          {" "}· SEQ {network?.lastSeq ?? 0} · AGENTS {network?.onlineAgents ?? 0}
+        </span>
       </div>
 
       <div className="workbench">

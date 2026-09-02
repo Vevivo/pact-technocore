@@ -1,10 +1,26 @@
 import { decodeEvent, encodeEvent, singleLine } from "./protocol.mjs";
 import { signWithJwk, verifyDidSignature } from "./crypto.mjs";
 
+const NONCE_PATTERN = /^[1-9]\d{0,18}$/;
+
+function nonceValid(value) {
+  return typeof value === "string" && NONCE_PATTERN.test(value);
+}
+
+function storedNonceValid(value) {
+  return nonceValid(value) || (typeof value === "number" && Number.isInteger(value) && value > 0);
+}
+
+function normalizeEnvelopeNonce(value) {
+  if (nonceValid(value)) return value;
+  if (Number.isSafeInteger(value) && value > 0) return String(value);
+  return null;
+}
+
 function messageValid(room, message) {
   if (!message || !Number.isSafeInteger(message.seq) || message.seq < 1) return false;
   if (typeof message.ts !== "string" || Number.isNaN(Date.parse(message.ts))) return false;
-  if (typeof message.from !== "string" || !Number.isSafeInteger(message.nonce) || message.nonce < 1) return false;
+  if (typeof message.from !== "string" || !storedNonceValid(message.nonce)) return false;
   if (typeof message.text !== "string" || message.text !== singleLine(message.text)) return false;
   // Technocore verifies the signature before storing a did:key author, but its
   // read API intentionally returns the DID and nonce without returning `sig`.
@@ -24,6 +40,7 @@ export class TechnocoreClient {
     this.fetch = fetchImpl;
     this.running = false;
     this.abort = null;
+    this.readToken = 0;
   }
 
   roomUrl(search = {}) {
@@ -36,9 +53,10 @@ export class TechnocoreClient {
 
   async syncOnce({ wait = 0 } = {}) {
     const since = this.store.lastRoomSeq(this.config.room);
+    const cacheToken = `${Date.now()}-${this.readToken += 1}`;
     const search = since > 0
-      ? { format: "json", since, wait: Math.min(10, wait), limit: 200 }
-      : { format: "json", limit: 200 };
+      ? { format: "json", since, wait: Math.min(10, wait), limit: 200, n: cacheToken }
+      : { format: "json", limit: 200, n: cacheToken };
     const timeout = AbortSignal.timeout((Math.max(0, wait) + 15) * 1000);
     const signal = this.abort?.signal ? AbortSignal.any([this.abort.signal, timeout]) : timeout;
     const response = await this.fetch(this.roomUrl(search), {
@@ -66,15 +84,16 @@ export class TechnocoreClient {
 
   async postEnvelope(envelope) {
     const { did, sig, nonce, text } = envelope || {};
-    if (!Number.isSafeInteger(nonce) || nonce < 1 || typeof text !== "string" || text !== singleLine(text)) {
+    const normalizedNonce = normalizeEnvelopeNonce(nonce);
+    if (!normalizedNonce || typeof text !== "string" || text !== singleLine(text)) {
       throw new Error("Invalid signed message envelope.");
     }
     if (!decodeEvent(text)) throw new Error("Only valid PACT events can be relayed.");
-    if (!verifyDidSignature(did, `${this.config.room}|${nonce}|${text}`, sig)) throw new Error("DID signature did not verify.");
+    if (!verifyDidSignature(did, `${this.config.room}|${normalizedNonce}|${text}`, sig)) throw new Error("DID signature did not verify.");
     const response = await this.fetch(this.roomUrl(), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "user-agent": `PACT-Runtime/${this.config.version}` },
-      body: JSON.stringify({ did, sig, nonce, text }),
+      body: JSON.stringify({ did, sig, nonce: normalizedNonce, text }),
       signal: AbortSignal.timeout(15_000),
     });
     const body = await response.text();
@@ -85,8 +104,10 @@ export class TechnocoreClient {
   async publish(privateJwk, did, event) {
     const text = encodeEvent(event);
     const stateKey = `nonce:${did}:${this.config.room}`;
-    const previous = Number(this.store.state(stateKey)?.value || 0);
-    const nonce = Math.max(Date.now(), previous + 1);
+    let previous = 0n;
+    try { previous = BigInt(this.store.state(stateKey)?.value || "0"); } catch { /* reset an invalid local counter */ }
+    const now = BigInt(Date.now());
+    const nonce = (now > previous ? now : previous + 1n).toString();
     this.store.setState(stateKey, nonce);
     const sig = signWithJwk(privateJwk, `${this.config.room}|${nonce}|${text}`);
     await this.postEnvelope({ did, sig, nonce, text });

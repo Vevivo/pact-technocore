@@ -18,7 +18,7 @@ import { isPrivateAddress, selectLookupResult } from "../src/source-reader.mjs";
 import { normalizePolicy, policyAllows } from "../src/policy.mjs";
 import { Store } from "../src/db.mjs";
 import { createApi } from "../src/http-api.mjs";
-import { TechnocoreClient } from "../src/technocore.mjs";
+import { TechnocoreClient, messageValid } from "../src/technocore.mjs";
 import { openAiRequestBody, openAiResponseText } from "../src/providers.mjs";
 
 test("Ed25519 DID signing and encrypted envelopes round trip", () => {
@@ -178,7 +178,7 @@ test("a successful Technocore write returns without waiting for an archive read"
     sources: ["https://example.com"], proof: "source-citations", capability: "web-research", settlement: "not-available",
   });
   const room = "mb-pact-work-v1";
-  const nonce = Date.now();
+  const nonce = String(Date.now());
   const text = encodeEvent(event);
   const sig = signWithJwk(identity.privateJwk, `${room}|${nonce}|${text}`);
   const calls = [];
@@ -187,12 +187,50 @@ test("a successful Technocore write returns without waiting for an archive read"
     { lastRoomSeq: () => 0 },
     () => {},
     async (url, init) => {
-      calls.push({ url: String(url), method: init.method });
+      calls.push({ url: String(url), method: init.method, body: init.body });
       return new Response('{"ok":true}', { status: 201, headers: { "content-type": "application/json" } });
     },
   );
   await client.postEnvelope({ did: identity.did, sig, nonce, text });
   assert.deepEqual(calls.map((call) => call.method), ["POST"]);
+  assert.equal(typeof JSON.parse(calls[0].body).nonce, "string");
+
+  const legacyNonce = Date.now() + 1;
+  const legacySig = signWithJwk(identity.privateJwk, `${room}|${legacyNonce}|${text}`);
+  await client.postEnvelope({ did: identity.did, sig: legacySig, nonce: legacyNonce, text });
+  assert.deepEqual(calls.map((call) => call.method), ["POST", "POST"]);
+  assert.equal(JSON.parse(calls[1].body).nonce, String(legacyNonce));
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce, text,
+  }), true);
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce: Number(nonce), text,
+  }), true);
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce: 0, text,
+  }), false);
+});
+
+test("Technocore room reads use a unique cache-busting token", async () => {
+  const urls = [];
+  const store = {
+    lastRoomSeq: () => 8,
+    setState: () => {},
+  };
+  const client = new TechnocoreClient(
+    { room: "mb-pact-work-v1", technocoreBase: "https://technocore.example", version: "test" },
+    store,
+    () => {},
+    async (url) => {
+      urls.push(new URL(url));
+      return Response.json({ room: "mb-pact-work-v1", count: 0, first_seq: null, last_seq: 8, messages: [] });
+    },
+  );
+  await client.syncOnce();
+  await client.syncOnce();
+  assert.equal(urls.length, 2);
+  assert.ok(urls[0].searchParams.get("n"));
+  assert.notEqual(urls[0].searchParams.get("n"), urls[1].searchParams.get("n"));
 });
 
 function row(seq, author, event) {
