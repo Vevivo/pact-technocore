@@ -194,6 +194,12 @@ test("a successful Technocore write returns without waiting for an archive read"
   await client.postEnvelope({ did: identity.did, sig, nonce, text });
   assert.deepEqual(calls.map((call) => call.method), ["POST"]);
   assert.equal(typeof JSON.parse(calls[0].body).nonce, "string");
+
+  const legacyNonce = Date.now() + 1;
+  const legacySig = signWithJwk(identity.privateJwk, `${room}|${legacyNonce}|${text}`);
+  await client.postEnvelope({ did: identity.did, sig: legacySig, nonce: legacyNonce, text });
+  assert.deepEqual(calls.map((call) => call.method), ["POST", "POST"]);
+  assert.equal(JSON.parse(calls[1].body).nonce, String(legacyNonce));
   assert.equal(messageValid(room, {
     seq: 1, ts: new Date().toISOString(), from: identity.did, nonce, text,
   }), true);
