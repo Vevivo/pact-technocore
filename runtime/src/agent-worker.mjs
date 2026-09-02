@@ -61,7 +61,17 @@ export class AgentWorker {
       await this.technocore.publish(privateJwk, agent.did, claim);
       await this.technocore.syncOnce();
       const current = buildTaskViews(this.store.roomEvents(this.config.room)).find((item) => item.task.id === view.task.id);
-      if (!current?.activeClaim || current.activeClaim.id !== claim.id || current.activeClaim.author !== agent.did) return;
+      if (!current?.activeClaim) {
+        throw new Error("Technocore accepted the claim, but PACT could not confirm it from the room.");
+      }
+      if (current.activeClaim.id !== claim.id || current.activeClaim.author !== agent.did) {
+        this.logger("info", "Agent did not win task claim", {
+          agentDid: agent.did,
+          taskId: view.task.id,
+          activeClaimDid: current.activeClaim.author,
+        });
+        return;
+      }
 
       execution = this.store.createExecution(view.task.id, agent.id, claim.id);
       this.logger("info", "Agent claimed task", { agentDid: agent.did, taskId: view.task.id });
