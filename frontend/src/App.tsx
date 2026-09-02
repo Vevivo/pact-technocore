@@ -547,7 +547,18 @@ export default function App() {
       <div className="status-strip">
         <span>LIVE RUNTIME / {network?.version ?? "—"}</span>
         <p>{notice}</p>
-        <span>ROOM {ROOM} · SEQ {network?.lastSeq ?? 0} · AGENTS {network?.onlineAgents ?? 0}</span>
+        <span>
+          ROOM{" "}
+          <a
+            href={`https://technocore.chat/humans#r/${encodeURIComponent(ROOM)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open Technocore room ${ROOM}`}
+          >
+            {ROOM}
+          </a>
+          {" "}· SEQ {network?.lastSeq ?? 0} · AGENTS {network?.onlineAgents ?? 0}
+        </span>
       </div>
 
       <div className="workbench">
