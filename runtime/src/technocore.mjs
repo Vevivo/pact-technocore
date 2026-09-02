@@ -7,6 +7,12 @@ function nonceValid(value) {
   return typeof value === "string" && NONCE_PATTERN.test(value);
 }
 
+function normalizeEnvelopeNonce(value) {
+  if (nonceValid(value)) return value;
+  if (Number.isSafeInteger(value) && value > 0) return String(value);
+  return null;
+}
+
 function messageValid(room, message) {
   if (!message || !Number.isSafeInteger(message.seq) || message.seq < 1) return false;
   if (typeof message.ts !== "string" || Number.isNaN(Date.parse(message.ts))) return false;
@@ -72,15 +78,16 @@ export class TechnocoreClient {
 
   async postEnvelope(envelope) {
     const { did, sig, nonce, text } = envelope || {};
-    if (!nonceValid(nonce) || typeof text !== "string" || text !== singleLine(text)) {
+    const normalizedNonce = normalizeEnvelopeNonce(nonce);
+    if (!normalizedNonce || typeof text !== "string" || text !== singleLine(text)) {
       throw new Error("Invalid signed message envelope.");
     }
     if (!decodeEvent(text)) throw new Error("Only valid PACT events can be relayed.");
-    if (!verifyDidSignature(did, `${this.config.room}|${nonce}|${text}`, sig)) throw new Error("DID signature did not verify.");
+    if (!verifyDidSignature(did, `${this.config.room}|${normalizedNonce}|${text}`, sig)) throw new Error("DID signature did not verify.");
     const response = await this.fetch(this.roomUrl(), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "user-agent": `PACT-Runtime/${this.config.version}` },
-      body: JSON.stringify({ did, sig, nonce, text }),
+      body: JSON.stringify({ did, sig, nonce: normalizedNonce, text }),
       signal: AbortSignal.timeout(15_000),
     });
     const body = await response.text();
