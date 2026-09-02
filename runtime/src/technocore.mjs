@@ -40,6 +40,7 @@ export class TechnocoreClient {
     this.fetch = fetchImpl;
     this.running = false;
     this.abort = null;
+    this.readToken = 0;
   }
 
   roomUrl(search = {}) {
@@ -52,9 +53,10 @@ export class TechnocoreClient {
 
   async syncOnce({ wait = 0 } = {}) {
     const since = this.store.lastRoomSeq(this.config.room);
+    const cacheToken = `${Date.now()}-${this.readToken += 1}`;
     const search = since > 0
-      ? { format: "json", since, wait: Math.min(10, wait), limit: 200 }
-      : { format: "json", limit: 200 };
+      ? { format: "json", since, wait: Math.min(10, wait), limit: 200, n: cacheToken }
+      : { format: "json", limit: 200, n: cacheToken };
     const timeout = AbortSignal.timeout((Math.max(0, wait) + 15) * 1000);
     const signal = this.abort?.signal ? AbortSignal.any([this.abort.signal, timeout]) : timeout;
     const response = await this.fetch(this.roomUrl(search), {
