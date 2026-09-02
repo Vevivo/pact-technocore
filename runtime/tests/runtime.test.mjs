@@ -18,7 +18,7 @@ import { isPrivateAddress, selectLookupResult } from "../src/source-reader.mjs";
 import { normalizePolicy, policyAllows } from "../src/policy.mjs";
 import { Store } from "../src/db.mjs";
 import { createApi } from "../src/http-api.mjs";
-import { TechnocoreClient } from "../src/technocore.mjs";
+import { TechnocoreClient, messageValid } from "../src/technocore.mjs";
 import { openAiRequestBody, openAiResponseText } from "../src/providers.mjs";
 
 test("Ed25519 DID signing and encrypted envelopes round trip", () => {
@@ -178,7 +178,7 @@ test("a successful Technocore write returns without waiting for an archive read"
     sources: ["https://example.com"], proof: "source-citations", capability: "web-research", settlement: "not-available",
   });
   const room = "mb-pact-work-v1";
-  const nonce = Date.now();
+  const nonce = String(Date.now());
   const text = encodeEvent(event);
   const sig = signWithJwk(identity.privateJwk, `${room}|${nonce}|${text}`);
   const calls = [];
@@ -187,12 +187,19 @@ test("a successful Technocore write returns without waiting for an archive read"
     { lastRoomSeq: () => 0 },
     () => {},
     async (url, init) => {
-      calls.push({ url: String(url), method: init.method });
+      calls.push({ url: String(url), method: init.method, body: init.body });
       return new Response('{"ok":true}', { status: 201, headers: { "content-type": "application/json" } });
     },
   );
   await client.postEnvelope({ did: identity.did, sig, nonce, text });
   assert.deepEqual(calls.map((call) => call.method), ["POST"]);
+  assert.equal(typeof JSON.parse(calls[0].body).nonce, "string");
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce, text,
+  }), true);
+  assert.equal(messageValid(room, {
+    seq: 1, ts: new Date().toISOString(), from: identity.did, nonce: Number(nonce), text,
+  }), false);
 });
 
 function row(seq, author, event) {
