@@ -211,6 +211,28 @@ test("a successful Technocore write returns without waiting for an archive read"
   }), false);
 });
 
+test("Technocore room reads use a unique cache-busting token", async () => {
+  const urls = [];
+  const store = {
+    lastRoomSeq: () => 8,
+    setState: () => {},
+  };
+  const client = new TechnocoreClient(
+    { room: "mb-pact-work-v1", technocoreBase: "https://technocore.example", version: "test" },
+    store,
+    () => {},
+    async (url) => {
+      urls.push(new URL(url));
+      return Response.json({ room: "mb-pact-work-v1", count: 0, first_seq: null, last_seq: 8, messages: [] });
+    },
+  );
+  await client.syncOnce();
+  await client.syncOnce();
+  assert.equal(urls.length, 2);
+  assert.ok(urls[0].searchParams.get("n"));
+  assert.notEqual(urls[0].searchParams.get("n"), urls[1].searchParams.get("n"));
+});
+
 function row(seq, author, event) {
   return {
     room: "mb-pact-work-v1", seq, ts: `2026-08-27T00:0${seq}:00Z`, author_did: author,
