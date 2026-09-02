@@ -19,6 +19,8 @@ button:disabled { cursor:wait; opacity:.46; }
 .plain-action { border:0; background:transparent; padding:10px 0; cursor:pointer; }
 .status-strip { min-height:34px; position:sticky; top:0; z-index:30; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:18px; padding:7px 22px; color:var(--paper); background:var(--ink); font:700 9px/1.35 monospace; letter-spacing:.08em; }
 .status-strip p { margin:0; color:var(--acid); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.status-strip a { color:var(--paper); text-decoration-color:var(--acid); text-underline-offset:2px; }
+.status-strip a:hover,.status-strip a:focus-visible { color:var(--acid); }
 .workbench { display:grid; grid-template-columns:168px minmax(420px,1fr) 318px; min-height:calc(100vh - 136px); }
 .signal-spine,.agent-bay { border-right:1px solid var(--line); }
 .signal-spine { padding:20px 14px; display:flex; flex-direction:column; }
