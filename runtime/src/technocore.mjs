@@ -7,6 +7,10 @@ function nonceValid(value) {
   return typeof value === "string" && NONCE_PATTERN.test(value);
 }
 
+function storedNonceValid(value) {
+  return nonceValid(value) || (typeof value === "number" && Number.isInteger(value) && value > 0);
+}
+
 function normalizeEnvelopeNonce(value) {
   if (nonceValid(value)) return value;
   if (Number.isSafeInteger(value) && value > 0) return String(value);
@@ -16,7 +20,7 @@ function normalizeEnvelopeNonce(value) {
 function messageValid(room, message) {
   if (!message || !Number.isSafeInteger(message.seq) || message.seq < 1) return false;
   if (typeof message.ts !== "string" || Number.isNaN(Date.parse(message.ts))) return false;
-  if (typeof message.from !== "string" || !nonceValid(message.nonce)) return false;
+  if (typeof message.from !== "string" || !storedNonceValid(message.nonce)) return false;
   if (typeof message.text !== "string" || message.text !== singleLine(message.text)) return false;
   // Technocore verifies the signature before storing a did:key author, but its
   // read API intentionally returns the DID and nonce without returning `sig`.
