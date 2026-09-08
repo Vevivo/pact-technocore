@@ -47,3 +47,13 @@ test("the task composer exposes relay progress and an inline failure state", asy
   assert.match(css, /composer-status\.relay-error/);
   assert.doesNotMatch(app, /<fieldset className="proof-choices/);
 });
+
+test("signed Technocore envelopes serialize nonce as a digit string", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, identity] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/identity.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /const nextNonce = \(\) => String\(/);
+  assert.match(identity, /nonce: string/);
+});

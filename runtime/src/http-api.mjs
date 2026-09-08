@@ -5,6 +5,8 @@ import { publicAgent } from "./db.mjs";
 import { normalizePolicy } from "./policy.mjs";
 import { validProvider } from "./providers.mjs";
 import { buildTaskViews } from "./tasks.mjs";
+import { NetworkStore } from './network-store.mjs';
+import { normalizeNetworkPolicy, publicRoom } from './network-policy.mjs';
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -119,7 +121,8 @@ function agentCreateInput(input) {
   return { provider: input.provider, model: modelName(input.model), apiKey: input.apiKey, policy: normalizePolicy(input.policy) };
 }
 
-export function createApi(config, store, technocore, logger) {
+export function createApi(config, store, technocore, logger, networkLedger = new NetworkStore(store)) {
+  const agentView = row => ({ ...publicAgent(row), network: { ...networkLedger.profile(row.id), callsToday: networkLedger.callsToday(row.id) } });
   const limiter = new RateLimiter();
   const sweep = setInterval(() => { limiter.sweep(); store.purgeExpired(new Date().toISOString()); }, 60_000);
   sweep.unref();
@@ -154,6 +157,34 @@ export function createApi(config, store, technocore, logger) {
       if (request.method === "GET" && url.pathname === "/v1/tasks") {
         const tasks = buildTaskViews(store.roomEvents(config.room)).slice(0, 500);
         json(response, 200, { room: config.room, tasks }, headers);
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/network-work') {
+        json(response, 200, { works: networkLedger.recent(), roomLastMessageAt: store.state('technocore_room_last_message')?.value ?? null, settlement: 'not-available' }, headers);
+        return;
+      }
+      const workMatch = url.pathname.match(/^\/v1\/network-work\/([0-9a-f]{64})$/);
+      if (request.method === 'GET' && workMatch) {
+        const work = networkLedger.get(workMatch[1]);
+        if (!work) throw new HttpError(404, 'Network work not found.');
+        json(response, 200, { version: 1, ...networkLedger.publicWork(work),
+          notice: 'Source and reply signatures prove key possession. Sequence and timestamps are venue metadata. Hashes do not prove answer accuracy. No requester acceptance or payment is recorded.' }, headers);
+        return;
+      }
+      const networkMatch = url.pathname.match(/^\/v1\/agents\/([0-9a-f-]{36})\/network$/i);
+      if (request.method === 'PATCH' && networkMatch) {
+        const session = authenticate(store, request);
+        const agent = store.agentForOwner(networkMatch[1], session.ownerDid);
+        if (!agent) throw new HttpError(404, 'Agent not found.');
+        const input = await body(request);
+        let policy;
+        try { policy = normalizeNetworkPolicy(input?.enabled === false ? { ...networkLedger.profile(agent.id).policy, enabled: false } : input); }
+        catch (error) { throw new HttpError(400, error.message); }
+        if (policy.enabled && !publicRoom(config.room)) throw new HttpError(400, 'Network mirroring requires a public PACT destination room.');
+        if (policy.enabled && input.confirmPublicPosting !== true) throw new HttpError(400, 'Confirm public source/reply mirroring and provider API spending before enabling network mode.');
+        networkLedger.saveProfile(agent.id, policy);
+        store.audit('network.policy.updated', session.ownerDid, agent.id, { enabled: policy.enabled, rooms: policy.rooms, maxCallsPerDay: policy.maxCallsPerDay });
+        json(response, 200, { agent: agentView(agent) }, headers);
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/auth/challenge") {
@@ -192,7 +223,7 @@ export function createApi(config, store, technocore, logger) {
       }
       if (request.method === "GET" && url.pathname === "/v1/agents") {
         const session = authenticate(store, request);
-        json(response, 200, { agents: store.agentsForOwner(session.ownerDid).map(publicAgent) }, headers);
+        json(response, 200, { agents: store.agentsForOwner(session.ownerDid).map(agentView) }, headers);
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/agents") {
@@ -245,8 +276,11 @@ export function createApi(config, store, technocore, logger) {
           changes.enabled = input.enabled ? 1 : 0;
         }
         const updated = store.updateAgent(existing.id, session.ownerDid, changes);
+        if (input.enabled !== undefined && networkLedger.profile(existing.id).revision) {
+          networkLedger.saveProfile(existing.id, networkLedger.profile(existing.id).policy);
+        }
         store.audit("agent.updated", session.ownerDid, existing.id, { enabled: Boolean(updated.enabled), policy: nextPolicy });
-        json(response, 200, { agent: publicAgent(updated) }, headers);
+        json(response, 200, { agent: agentView(updated) }, headers);
         return;
       }
       if (request.method === "DELETE" && agentMatch) {

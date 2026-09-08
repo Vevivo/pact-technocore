@@ -67,7 +67,7 @@ export async function importIdentityFile(raw: string): Promise<Identity> {
   const jwk = (payload as { privateKeyJwk?: JsonWebKey }).privateKeyJwk ?? (payload as JsonWebKey);
   return importJwk(jwk);
 }
-export async function signRoomMessage(privateKey: CryptoKey, room: string, nonce: number, text: string) {
+export async function signRoomMessage(privateKey: CryptoKey, room: string, nonce: string, text: string) {
   const signature = await crypto.subtle.sign("Ed25519", privateKey, encoder.encode(`${room}|${nonce}|${sweepSingleLine(text)}`));
   return bytesToBase64Url(new Uint8Array(signature));
 }
