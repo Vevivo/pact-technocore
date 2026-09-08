@@ -24,8 +24,13 @@ export function isPrivateAddress(address) {
     || /^fe[89ab]/.test(value) || value.startsWith("2001:db8:") || value.startsWith("2001:10:");
 }
 
-function safeUrl(input) {
+function safeUrl(input, allowedHosts) {
   const url = new URL(input);
+  if (allowedHosts && (!allowedHosts.includes(url.hostname) || url.protocol !== 'https:'
+    || /\/(say(?:-signed)?|set(?:-signed)?)(?:\/|$)/i.test(decodeURIComponent(url.pathname))
+    || (url.hostname === 'technocore.chat' && url.pathname.startsWith('/kv/')))) {
+    throw new Error('Network source or redirect is outside the approved read-only hosts and paths.');
+  }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port && !["80", "443"].includes(url.port)) {
     throw new Error("Source must be a public HTTP(S) URL without credentials or a custom port.");
   }
@@ -75,6 +80,7 @@ function requestOnce(url, maxBytes) {
     }, (response) => {
       const chunks = [];
       let size = 0;
+      response.on('error', reject);
       response.on("data", (chunk) => {
         size += chunk.length;
         if (size > maxBytes) {
@@ -86,6 +92,9 @@ function requestOnce(url, maxBytes) {
       response.on("end", () => resolve({ status: response.statusCode || 0, headers: response.headers, body: Buffer.concat(chunks) }));
     });
     request.setTimeout(12_000, () => request.destroy(new Error("Source request timed out.")));
+    const deadline = setTimeout(() => request.destroy(new Error('Source total deadline exceeded.')), 15_000);
+    deadline.unref();
+    request.on('close', () => clearTimeout(deadline));
     request.on("error", reject);
     request.end();
   });
@@ -104,14 +113,14 @@ function readable(raw, contentType) {
     .replace(/\s+/g, " ").trim().slice(0, 60_000);
 }
 
-export async function readSource(input) {
-  let url = safeUrl(input);
+export async function readSource(input, { allowedHosts } = {}) {
+  let url = safeUrl(input, allowedHosts);
   for (let hop = 0; hop <= 3; hop += 1) {
     const response = await requestOnce(url, 200_000);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.location;
       if (!location) throw new Error("Source redirect has no destination.");
-      url = safeUrl(new URL(location, url).toString());
+      url = safeUrl(new URL(location, url).toString(), allowedHosts);
       continue;
     }
     if (response.status < 200 || response.status >= 300) throw new Error(`Source returned HTTP ${response.status}.`);

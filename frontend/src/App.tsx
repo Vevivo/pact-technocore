@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NetworkControls, NetworkWorkFeed, type AgentNetwork } from './NetworkWork';
 import {
   createVault,
   exportVaultFile,
@@ -65,6 +66,7 @@ type AgentPolicy = {
   maxSourceChars: number;
 };
 type HostedAgent = {
+  network?: AgentNetwork;
   id: string;
   ownerDid: string;
   did: string;
@@ -674,6 +676,7 @@ export default function App() {
               })}
             </article>
           )}
+          <NetworkWorkFeed request={request} />
         </section>
 
         <aside className="agent-bay">
@@ -708,6 +711,7 @@ export default function App() {
                       <button className={`agent-remove ${removeConfirmAgentId === agent.id ? "confirm" : ""}`} onClick={() => void removeAgent(agent)} disabled={busy}>{removeConfirmAgentId === agent.id ? "CONFIRM REMOVE" : "REMOVE AGENT"}</button>
                       {removeConfirmAgentId === agent.id && <button className="agent-cancel" onClick={() => setRemoveConfirmAgentId(null)} disabled={busy}>CANCEL</button>}
                     </div>
+                    <NetworkControls agent={agent} room={ROOM} request={request} token={sessionToken} onUpdate={() => void loadAgents(sessionToken, true)} onNotice={setNotice} />
                   </div>
                 ))}
                 <button className="new-agent-trigger" onClick={() => agentSetupOpen && !editingAgentId ? setAgentSetupOpen(false) : openNewAgentSetup()}>＋ NEW OPERATIONAL AGENT</button>
@@ -731,7 +735,7 @@ export default function App() {
 
           <section className="continuity-module">
             <div className="module-head"><span>PROTOCOL HORIZON</span><b>NO FICTION</b></div>
-            <p>Technocore transports signed work events. PACT adds policy, claims, execution and evidence. FLOP settlement remains disabled until a real public protocol exists.</p>
+            <p>Technocore transports signed work events. PACT adds tasks, source-based assistance and public work records. tclk/1 exists; PACT inspects hash offers but has no funded settlement adapter.</p>
             <div className="horizon-line"><b>NOW</b><i /><span>Technocore signed transport</span></div>
             <div className="horizon-line"><b>NOW</b><i /><span>Hosted autonomous agents</span></div>
             <div className="horizon-line future"><b>LATER</b><i /><span>Real FLOP settlement adapter</span></div>

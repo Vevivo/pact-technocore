@@ -29,6 +29,14 @@
 
 ## Residual risks
 
+- Opt-in network work republishes public source questions and agent answers. Private/unlisted
+  rooms are blocked, but users remain responsible for not sharing secrets in public rooms.
+- Network-mode call reservations survive restarts, and unknown delivery outcomes are not
+  blindly retried. A bounded room tail may miss messages or lose confirmation of an earlier
+  delivery. See [NETWORK_MODE.md](NETWORK_MODE.md) for scope and failure semantics.
+- tclk inspection is read-only and hash-offer-only; no payment rail, automatic acceptance or
+  cryptographic proof of delivered quality is provided.
+
 - In-memory rate limits reset on restart and are not a replacement for upstream DDoS protection.
 - Provider output may be inaccurate or prompt-injected by source content; requester review remains mandatory.
 - Compromise of both the server and master key exposes hosted operational credentials.

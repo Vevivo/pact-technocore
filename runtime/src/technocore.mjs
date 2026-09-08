@@ -52,7 +52,8 @@ export class TechnocoreClient {
   }
 
   async syncOnce({ wait = 0 } = {}) {
-    const since = this.store.lastRoomSeq(this.config.room);
+    const cursorKey = `technocore-cursor:${this.config.room}`;
+    const since = Math.max(this.store.lastRoomSeq(this.config.room), Number(this.store.state(cursorKey)?.value || 0));
     const cacheToken = `${Date.now()}-${this.readToken += 1}`;
     const search = since > 0
       ? { format: "json", since, wait: Math.min(10, wait), limit: 200, n: cacheToken }
@@ -79,6 +80,12 @@ export class TechnocoreClient {
       if (this.store.insertRoomEvent(this.config.room, message, event)) accepted += 1;
     }
     this.store.setState("technocore_last_sync", new Date().toISOString());
+    const latest = messages.filter(m => Number.isSafeInteger(m.seq) && Number.isFinite(Date.parse(m.ts))).sort((a, b) => b.seq - a.seq)[0];
+    if (latest) {
+      const previousTime = Date.parse(this.store.state('technocore_room_last_message')?.value || '') || 0;
+      if (Date.parse(latest.ts) > previousTime) this.store.setState('technocore_room_last_message', latest.ts);
+      this.store.setState(cursorKey, Math.max(latest.seq, Number(this.store.state(cursorKey)?.value || 0)));
+    }
     return { accepted, received: messages.length, lastSeq: this.store.lastRoomSeq(this.config.room) };
   }
 

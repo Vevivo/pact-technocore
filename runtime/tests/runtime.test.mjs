@@ -215,6 +215,7 @@ test("Technocore room reads use a unique cache-busting token", async () => {
   const urls = [];
   const store = {
     lastRoomSeq: () => 8,
+    state: () => null,
     setState: () => {},
   };
   const client = new TechnocoreClient(
@@ -231,6 +232,18 @@ test("Technocore room reads use a unique cache-busting token", async () => {
   assert.equal(urls.length, 2);
   assert.ok(urls[0].searchParams.get("n"));
   assert.notEqual(urls[0].searchParams.get("n"), urls[1].searchParams.get("n"));
+});
+
+test('room cursor advances past non-task activity so network mirrors cannot starve tasks', async () => {
+  const state = new Map(); const urls = [];
+  const store = { lastRoomSeq: () => 8, state: key => state.get(key), setState: (key, value) => state.set(key, { value }) };
+  const client = new TechnocoreClient({ room: 'lobby', technocoreBase: 'https://technocore.example', version: 'test' }, store, () => {}, async url => {
+    urls.push(new URL(url));
+    return Response.json({ messages: [{ seq: 9, ts: new Date().toISOString(), from: 'visitor', text: 'Not a task' }] });
+  });
+  await client.syncOnce(); await client.syncOnce();
+  assert.equal(urls[0].searchParams.get('since'), '8');
+  assert.equal(urls[1].searchParams.get('since'), '9');
 });
 
 function row(seq, author, event) {
