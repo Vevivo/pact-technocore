@@ -10,7 +10,7 @@ The service refuses to start without all of the following:
 - one or more exact HTTPS `PUBLIC_ORIGINS`;
 - one or more valid `ALLOWED_OWNER_DIDS`.
 
-Only allowlisted owner DIDs may open the hosted-agent control plane. Public task and network endpoints remain available to the configured frontend origin.
+By default, only allowlisted owner DIDs may open the hosted-agent control plane. Operators may explicitly choose `HOSTED_REGISTRATION=open` to admit any verified owner DID, with per-owner agent limits and separate provider credentials. Admission never grants control over another owner's agents. See [hosted registration](../docs/HOSTED_REGISTRATION.md).
 
 ## Install
 

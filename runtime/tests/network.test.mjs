@@ -108,6 +108,57 @@ test('research URLs are constrained and redirect host checks fail before fetchin
   await assert.rejects(readSource('https://technocore.chat/r/x/say-signed/a/b/c/d', { allowedHosts: ['technocore.chat'] }), /outside/);
 });
 
+test('conversation participation broadens topics only when enabled and keeps signature and echo checks', () => {
+  const peer = generateIdentity(), agent = generateIdentity(), now = Date.now();
+  const record = signed(peer, 'lobby', 'Could someone explain what this room is for?');
+  const strict = normalizeNetworkPolicy();
+  const conversational = normalizeNetworkPolicy({ participate: true });
+  assert.equal(candidateKind(strict, agent.did, 'lobby', record, now, now - 1000), null);
+  assert.equal(candidateKind(conversational, agent.did, 'lobby', record, now, now - 1000), 'conversation');
+  assert.equal(candidateKind(conversational, agent.did, 'lobby', { ...record, sig: undefined }, now, now - 1000), null);
+  assert.equal(candidateKind(conversational, agent.did, 'lobby', signed(agent, 'lobby', 'I have answered this.'), now, now - 1000), null);
+  assert.equal(candidateKind(conversational, agent.did, 'lobby', signed(peer, 'lobby', 'PACT-NET/1 mirror'), now, now - 1000), null);
+  assert.throws(() => normalizeNetworkPolicy({ participate: 'yes' }), /boolean/);
+});
+
+test('conversation context is verified, bounded and retained; model can choose silence without a public post', async t => {
+  const f = fixture(t); f.source.seq = 20; f.create();
+  const records = Array.from({ length: 12 }, (_, i) => signed(f.peer, 'lobby', `Conversation line ${i}`, i + 1));
+  records.push({ ...signed(f.peer, 'lobby', 'TAMPERED', 15), sig: 'bad' });
+  records.push(signed(f.peer, 'other-room', 'WRONG ROOM', 16));
+  records.push(signed(f.peer, 'lobby', 'FUTURE SEQUENCE', 21));
+  f.worker.infer = async (...args) => {
+    const brief = args[3].brief;
+    assert.match(brief, /Conversation line 11/);
+    assert.doesNotMatch(brief, /TAMPERED|WRONG ROOM|FUTURE SEQUENCE|Conversation line 0"/);
+    return { summary: JSON.stringify({ action: 'ignore', title: 'Already answered', answer: '' }) };
+  };
+  await f.worker.execute(f.workId, f.agent, f.profile, records);
+  assert.equal(f.ledger.get(f.workId).status, 'skipped');
+  const saved = JSON.parse(f.ledger.get(f.workId).result_json).context;
+  assert.equal(saved.length, 8);
+  assert.equal(saved.every(record => verifiedRecord('lobby', record)), true);
+  assert.equal(f.posts.length, 0);
+  assert.equal(f.ledger.callsToday(f.agent.id), 1);
+});
+
+test('contextual invitations use the same model call and cannot repeat for the recipient after restart', async t => {
+  const f = fixture(t); f.create();
+  const profile = f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, inviteAgents: true });
+  f.worker.infer = async () => ({ summary: JSON.stringify({ action: 'reply', title: 'Trying signed tasks', answer: 'A signed task describes the requested work and its evidence requirements.', invite: true }) });
+  await f.worker.execute(f.workId, f.agent, profile);
+  assert.equal(f.posts.length, 1);
+  assert.match(f.posts[0].text, /humans#r\/mb-pact-test/);
+  const result = JSON.parse(f.ledger.get(f.workId).result_json);
+  assert.equal(result.outputHash, sha256(result.summary));
+  assert.equal(f.ledger.callsToday(f.agent.id), 1);
+  const restarted = new NetworkWorker(f.config, f.store, f.ledger, () => {}, f.deps); restarted.running = true;
+  assert.equal(restarted.invitation(f.agent, profile, 'another-room', f.peer.did), null);
+  assert.equal(restarted.invitation(f.agent, profile, f.config.room, f.owner.did), null);
+  const disabled = f.ledger.saveProfile(f.agent.id, { ...profile.policy, inviteAgents: false });
+  assert.equal(restarted.invitation(f.agent, disabled, 'lobby', f.owner.did), null);
+});
+
 test('real signed request -> source research -> verified reply -> signed PACT mirror and public receipt', async t => {
   const f = fixture(t); f.create();
   await f.worker.execute(f.workId, f.agent, f.profile);
@@ -164,7 +215,9 @@ test('failed model calls count against durable budget and paused agent cannot pu
 });
 
 test('owner-only network control requires explicit consent; public feed never contains credentials', async t => {
-  const f = fixture(t); const api = createApi(f.config, f.store, {}, () => {}, f.ledger);
+  const f = fixture(t);
+  f.config.allowedOwnerDids.add(f.peer.did); // Admission is allowed; ownership still must deny access.
+  const api = createApi(f.config, f.store, {}, () => {}, f.ledger);
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => api.close(resolve)));
   const base = `http://127.0.0.1:${api.address().port}`;

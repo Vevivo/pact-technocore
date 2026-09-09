@@ -91,11 +91,22 @@ function bearer(request) {
   return header.startsWith("Bearer ") ? header.slice(7) : null;
 }
 
-function authenticate(store, request) {
+function registrationAllowed(config, did) {
+  return config.hostedRegistration === "open" || config.allowedOwnerDids.has(did);
+}
+
+function requireRegistration(config, did) {
+  if (!registrationAllowed(config, did)) {
+    throw new HttpError(403, "Hosted agent registration is invite-only on this server. Your DID can still publish tasks; connecting an agent requires operator access.");
+  }
+}
+
+function authenticate(config, store, request) {
   const token = bearer(request);
   if (!token) throw new HttpError(401, "DID session required.");
   const session = store.session(sha256(token), new Date().toISOString());
   if (!session) throw new HttpError(401, "DID session expired or invalid.");
+  requireRegistration(config, session.owner_did);
   return { token, ownerDid: session.owner_did };
 }
 
@@ -112,6 +123,11 @@ function networkSnapshot(config, store) {
     archiveGap: gap ? JSON.parse(gap.value) : null,
     ...stats,
     settlement: "not-available",
+    hosting: {
+      registration: config.hostedRegistration === "open" ? "open" : "allowlist",
+      maxAgentsPerOwner: config.maxAgentsPerOwner ?? 2,
+      available: store.activeAgentCount() < (config.maxHostedAgents ?? 20),
+    },
   };
 }
 
@@ -173,7 +189,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
       }
       const networkMatch = url.pathname.match(/^\/v1\/agents\/([0-9a-f-]{36})\/network$/i);
       if (request.method === 'PATCH' && networkMatch) {
-        const session = authenticate(store, request);
+        const session = authenticate(config, store, request);
         const agent = store.agentForOwner(networkMatch[1], session.ownerDid);
         if (!agent) throw new HttpError(404, 'Agent not found.');
         const input = await body(request);
@@ -191,7 +207,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         if (!limiter.take(`auth:${ip}`, 10)) throw new HttpError(429, "Too many login attempts.");
         const input = await body(request);
         try { publicJwkFromDid(input.did); } catch { throw new HttpError(400, "A valid Ed25519 did:key is required."); }
-        if (!config.allowedOwnerDids.has(input.did)) throw new HttpError(403, "This DID is not authorized to control hosted agents.");
+        requireRegistration(config, input.did);
         const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
         const nonce = randomToken(24);
         const statement = `PACT LOGIN\nDID: ${input.did}\nChallenge: ${nonce}\nExpires: ${expiresAt}`;
@@ -205,6 +221,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         const challenge = store.challenge(input.challengeId);
         const now = new Date().toISOString();
         if (!challenge || challenge.used_at || challenge.expires_at <= now || challenge.did !== input.did) throw new HttpError(400, "Challenge is invalid or expired.");
+        requireRegistration(config, input.did);
         if (!verifyDidSignature(input.did, challenge.statement, input.signature)) throw new HttpError(401, "DID signature did not verify.");
         if (!store.consumeChallenge(challenge.id, now)) throw new HttpError(409, "Challenge was already used.");
         const token = randomToken(32);
@@ -215,20 +232,31 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/auth/logout") {
-        const session = authenticate(store, request);
+        const session = authenticate(config, store, request);
         store.deleteSession(sha256(session.token));
         store.audit("session.deleted", session.ownerDid);
         json(response, 200, { ok: true }, headers);
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/agents") {
-        const session = authenticate(store, request);
-        json(response, 200, { agents: store.agentsForOwner(session.ownerDid).map(agentView) }, headers);
+        const session = authenticate(config, store, request);
+        json(response, 200, { ownerDid: session.ownerDid, agents: store.agentsForOwner(session.ownerDid).map(agentView) }, headers);
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/agents") {
-        const session = authenticate(store, request);
-        const input = agentCreateInput(await body(request));
+        const session = authenticate(config, store, request);
+        const raw = await body(request);
+        const input = agentCreateInput(raw);
+        if (config.hostedRegistration === "open" && raw.confirmHostedKeys !== true) {
+          throw new HttpError(400, "Confirm that your provider key and agent key are hosted on this server and that model use is billed to your provider account.");
+        }
+        // Count and insert synchronously after the last await so concurrent creates cannot exceed capacity.
+        if (store.activeAgentCount(session.ownerDid) >= (config.maxAgentsPerOwner ?? 2)) {
+          throw new HttpError(409, "Your agent limit is reached. Remove an unused agent or update its API key/model.");
+        }
+        if (store.activeAgentCount() >= (config.maxHostedAgents ?? 20)) {
+          throw new HttpError(409, "Hosted agent capacity is full. Existing agents remain available.");
+        }
         const identity = generateIdentity();
         const id = randomUUID();
         const now = new Date().toISOString();
@@ -249,7 +277,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
       }
       const agentMatch = url.pathname.match(/^\/v1\/agents\/([0-9a-f-]{36})$/i);
       if (request.method === "PATCH" && agentMatch) {
-        const session = authenticate(store, request);
+        const session = authenticate(config, store, request);
         const existing = store.agentForOwner(agentMatch[1], session.ownerDid);
         if (!existing) throw new HttpError(404, "Agent not found.");
         const input = await body(request);
@@ -284,7 +312,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         return;
       }
       if (request.method === "DELETE" && agentMatch) {
-        const session = authenticate(store, request);
+        const session = authenticate(config, store, request);
         const existing = store.agentForOwner(agentMatch[1], session.ownerDid);
         if (!existing) throw new HttpError(404, "Agent not found.");
         if (existing.enabled) throw new HttpError(409, "Pause the agent before removing it.");

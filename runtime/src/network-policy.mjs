@@ -24,10 +24,10 @@ export function normalizeNetworkPolicy(input = {}) {
   if (topics.length > 8 || topics.some(topic => typeof topic !== 'string' || topic.length < 3 || topic.length > 40)) throw new Error('Choose up to eight topics of 3–40 characters.');
   const maxCallsPerDay = input.maxCallsPerDay ?? 6;
   if (!Number.isInteger(maxCallsPerDay) || maxCallsPerDay < 1 || maxCallsPerDay > 24) throw new Error('Network model-call limit must be 1–24 per UTC day.');
-  for (const key of ['enabled', 'publicQuestions', 'observeTclk', 'maintenanceCheck']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} must be boolean.`);
+  for (const key of ['enabled', 'publicQuestions', 'participate', 'inviteAgents', 'observeTclk', 'maintenanceCheck']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} must be boolean.`);
   if (input.enabled && (!rooms.length || !allowedDids.length)) throw new Error('Choose rooms and allowed requesters before enabling network work.');
   return { enabled: input.enabled ?? false, rooms, sourceHosts, allowedDids, topics,
-    publicQuestions: input.publicQuestions ?? false, observeTclk: input.observeTclk ?? true,
+    publicQuestions: input.publicQuestions ?? false, participate: input.participate ?? false, inviteAgents: input.inviteAgents ?? false, observeTclk: input.observeTclk ?? true,
     maintenanceCheck: input.maintenanceCheck ?? false, maxCallsPerDay };
 }
 
@@ -50,6 +50,7 @@ export function candidateKind(policy, agentDid, room, record, now, enabledAt) {
   if (time < enabledAt || time < now - 180_000 || time > now + 30_000) return null;
   if (/^(PACT\/1 |PACT-NET\/1 |PACT reply )/.test(record.text)) return null;
   if (record.text.startsWith('tclk1 ')) return policy.observeTclk && room === 'tclk-offers' ? 'offer' : null;
+  if (policy.participate && record.text.trim()) return 'conversation';
   if (record.text.includes(agentDid) || /(?:^|\s)@?PACT(?:\s|[:,?!])/i.test(record.text)) return 'question';
   return policy.publicQuestions && /[?？]/.test(record.text)
     && policy.topics.some(topic => record.text.toLowerCase().includes(topic.toLowerCase())) ? 'question' : null;

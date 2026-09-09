@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NetworkControls, NetworkWorkFeed, type AgentNetwork } from './NetworkWork';
+import { createPortal } from "react-dom";
+import { ExternalAgent } from './ExternalAgent';
 import {
   createVault,
   exportVaultFile,
@@ -43,6 +45,7 @@ type NetworkSnapshot = {
   onlineAgents: number;
   submitted: number;
   settlement: "not-available";
+  hosting?: { registration: "open" | "allowlist"; maxAgentsPerOwner: number; available: boolean };
 };
 type ClaimView = PactClaim & { author: string; seq: number; ts: string };
 type SubmissionView = PactSubmission & { author: string; seq: number; ts: string; validClaim: boolean };
@@ -168,6 +171,9 @@ export default function App() {
   const [relayPhase, setRelayPhase] = useState<RelayPhase>("idle");
   const [relayMessage, setRelayMessage] = useState("Ready to sign locally, then relay one real task to Technocore.");
   const [agentSetupOpen, setAgentSetupOpen] = useState(false);
+  const [boardTab, setBoardTab] = useState("work");
+  const [hostConsent, setHostConsent] = useState(false);
+  const [controlError, setControlError] = useState("");
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [removeConfirmAgentId, setRemoveConfirmAgentId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -175,12 +181,13 @@ export default function App() {
   const [sources, setSources] = useState("");
   const [proof, setProof] = useState<"source-citations" | "structured-json">("source-citations");
   const [provider, setProvider] = useState<Provider>("openai");
-  const [model, setModel] = useState("gpt-5-mini");
+  const [model, setModel] = useState("gpt-5-nano");
   const [apiKey, setApiKey] = useState("");
   const [trustedRequesters, setTrustedRequesters] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const agentEditor = useRef<HTMLDialogElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -219,12 +226,38 @@ export default function App() {
 
   const loadAgents = useCallback(async (token: string, quiet = false) => {
     try {
-      const result = await request<{ agents: HostedAgent[] }>("/v1/agents", {}, token);
+      const result = await request<{ agents: HostedAgent[]; ownerDid?: string }>("/v1/agents", {}, token);
+      if (sessionStorage.getItem(SESSION_KEY) !== token) return;
+      const localDid = JSON.parse(localStorage.getItem(VAULT_KEY) || "null")?.did;
+      if (result.ownerDid && localDid !== result.ownerDid) {
+        sessionStorage.removeItem(SESSION_KEY); setSessionToken(null); setAgents([]);
+        return;
+      }
       setAgents(result.agents);
     } catch (error) {
       if (!quiet) setNotice(error instanceof Error ? error.message : "Agent control could not be loaded.");
     }
   }, []);
+
+  useEffect(() => {
+    const onHash = () => { if (window.location.hash.startsWith("#network")) setBoardTab("network"); };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    if (agentSetupOpen && sessionToken) agentEditor.current?.showModal();
+    else agentEditor.current?.close();
+  }, [agentSetupOpen, sessionToken]);
+
+  function disconnectControl() {
+    const oldToken = sessionStorage.getItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    setSessionToken(null); setAgents([]); setAgentSetupOpen(false);
+    setEditingAgentId(null); setRemoveConfirmAgentId(null); setApiKey(""); setControlError("");
+    if (oldToken) void request("/v1/auth/logout", { method: "POST" }, oldToken).catch(() => {});
+  }
 
   useEffect(() => {
     const initial = window.setTimeout(() => void syncNetwork(), 0);
@@ -259,6 +292,7 @@ export default function App() {
     try {
       const nextIdentity = await generateIdentity();
       const nextVault = await createVault(nextIdentity, passphrase);
+      disconnectControl();
       localStorage.setItem(VAULT_KEY, JSON.stringify(nextVault));
       setIdentity(nextIdentity);
       setVault(nextVault);
@@ -291,6 +325,7 @@ export default function App() {
         ? parsed as Vault
         : await createVault(await importIdentityFile(raw), passphrase);
       const nextIdentity = await unlockVault(nextVault, passphrase);
+      disconnectControl();
       localStorage.setItem(VAULT_KEY, JSON.stringify(nextVault));
       setIdentity(nextIdentity);
       setVault(nextVault);
@@ -306,6 +341,7 @@ export default function App() {
 
   async function connectControl() {
     if (!identity) return setNotice("Unlock the owner DID first.");
+    setControlError("");
     setBusy(true);
     try {
       const challenge = await request<{ challengeId: string; statement: string }>("/v1/auth/challenge", {
@@ -320,7 +356,8 @@ export default function App() {
       await loadAgents(session.token);
       setNotice("Owner control connected with a one-time DID challenge signature.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Owner control login failed.");
+      const message = error instanceof Error ? error.message : "Owner control login failed.";
+      setControlError(message); setNotice(message);
     } finally { setBusy(false); }
   }
 
@@ -404,6 +441,7 @@ export default function App() {
   async function createHostedAgent() {
     if (!identity || !sessionToken) return setNotice("Unlock the owner DID and connect agent control first.");
     if (!editingAgentId && passphrase.length < 12) return setNotice("The operational recovery vault needs your 12+ character passphrase.");
+    if (!editingAgentId && !hostConsent) return setNotice("Confirm key hosting and provider billing before creating your agent.");
     if (apiKey.trim().length < 8) return setNotice("Enter a valid provider API key.");
     const allowlist = trustedRequesters.split(/[\n,\s]+/).map((item) => item.trim()).filter(Boolean);
     if (!allowlist.length) return setNotice("Add at least one trusted requester DID. Your owner DID is the safest start.");
@@ -436,6 +474,7 @@ export default function App() {
           model: model.trim(),
           apiKey: apiKey.trim(),
           policy,
+          confirmHostedKeys: hostConsent,
         }),
       }, sessionToken);
       const operationalIdentity = await importIdentityFile(JSON.stringify(created.recoveryKey));
@@ -477,8 +516,9 @@ export default function App() {
     setEditingAgentId(null);
     setRemoveConfirmAgentId(null);
     setProvider("openai");
-    setModel("gpt-5-mini");
+    setModel("gpt-5-nano");
     setApiKey("");
+    setHostConsent(false);
     setTrustedRequesters(identity?.did ?? "");
     setAgentSetupOpen(true);
   }
@@ -582,10 +622,18 @@ export default function App() {
           <div className="board-head">
             <div>
               <span className="section-kicker">TECHNOCORE-NATIVE AGENT WORK EXCHANGE</span>
-              <h1>Work enters as a pact. Agents leave proof.</h1>
+              <h1>Work enters as a pact.<br />Agents leave proof.</h1>
+              <p className="board-intro">Publish a task. Let an agent work. Review the evidence.</p>
             </div>
-            <button className="create-trigger" onClick={toggleComposer}><span>{composerOpen ? "×" : "＋"}</span>{composerOpen ? "CLOSE" : <>POST<br />REAL WORK</>}</button>
+            <button className="create-trigger" onClick={() => { setBoardTab("work"); toggleComposer(); }}><span>{composerOpen ? "×" : "＋"}</span>{composerOpen ? "CLOSE" : <>POST<br />REAL WORK</>}</button>
           </div>
+
+          <nav className="workspace-tabs" aria-label="Workspace views">
+            <button className={boardTab === "work" ? "active" : ""} aria-pressed={boardTab === "work"} onClick={() => setBoardTab("work")}>Work board <span>{tasks.length}</span></button>
+            <button className={boardTab === "network" ? "active" : ""} aria-pressed={boardTab === "network"} onClick={() => setBoardTab("network")}>Across rooms <span>↗</span></button>
+            <a href="#agent-controls">My agents ↓</a>
+          </nav>
+          <div hidden={boardTab !== "work"}>
 
           {composerOpen && (
             <div className="task-composer" ref={composerRef}>
@@ -618,8 +666,8 @@ export default function App() {
             {!tasks.length ? (
               <div className="empty-register">
                 <div className="empty-wave"><i /><i /><i /><i /><i /></div>
-                <strong>NO PACT TASKS ON THIS FREQUENCY</strong>
-                <p>The runtime is live. Zero records means zero records—nothing is fabricated.</p>
+                <strong>{networkState === "error" ? "WORK BOARD UNAVAILABLE" : networkState === "syncing" ? "CONNECTING TO THE WORK BOARD" : "THE NEXT TASK STARTS WITH YOU"}</strong>
+                <p>{networkState === "error" ? "The runtime could not be reached. Use Sync to try again." : "Signed tasks will appear here with their progress and results."}</p>
               </div>
             ) : tasks.map((item, index) => {
               const expanded = selectedTask?.task.id === item.task.id;
@@ -676,14 +724,15 @@ export default function App() {
               })}
             </article>
           )}
-          <NetworkWorkFeed request={request} />
+          </div>
+          <div hidden={boardTab !== "network"}><NetworkWorkFeed request={request} /></div>
         </section>
 
-        <aside className="agent-bay">
-          <section>
-            <div className="module-head"><span>OWNER IDENTITY</span><b className={identity ? "online" : ""}>{identity ? "UNLOCKED" : vault ? "LOCKED" : "EMPTY"}</b></div>
+        <aside className="agent-bay" id="agent-controls" aria-label="Identity and my agents">
+          <section className="identity-module"><details open={!sessionToken}>
+            <summary className="module-head"><span>OWNER IDENTITY</span><b className={identity ? "online" : ""}>{identity ? "UNLOCKED" : vault ? "LOCKED" : "EMPTY"}</b></summary>
             <div className="did-display">{identity?.did ?? vault?.did ?? "Create or import an Ed25519 did:key"}</div>
-            <input className="passphrase" type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="12+ character local vault passphrase" />
+            <input className="passphrase" type="password" aria-label="Local vault passphrase" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="12+ character vault passphrase" />
             <div className="identity-actions">
               <button onClick={() => void (vault ? unlockDid() : createDid())} disabled={busy}>{vault ? "UNLOCK" : "CREATE DID"}</button>
               <button onClick={() => fileRef.current?.click()} disabled={busy}>IMPORT</button>
@@ -691,10 +740,13 @@ export default function App() {
             <input ref={fileRef} hidden type="file" accept="application/json,.json" onChange={(event) => event.target.files?.[0] && void importDid(event.target.files[0])} />
             {vault && <button className="export-key" onClick={() => exportVaultFile(vault)}>DOWNLOAD OWNER VAULT</button>}
             <p className="module-note">Owner signatures happen locally. The server receives a challenge signature, never this private key.</p>
-          </section>
+          </details></section>
 
           <section className="hosted-module">
-            <div className="module-head"><span>HOSTED OPERATIONS</span><b className={sessionToken ? "online" : ""}>{sessionToken ? "CONTROLLED" : "OFFLINE"}</b></div>
+            <div className="module-head"><span>MY AGENTS</span><b className={sessionToken ? "online" : ""}>{sessionToken ? "CONNECTED" : "NOT CONNECTED"}</b></div>
+            <p className="module-note">{network?.hosting?.registration === "open" ? "Bring your own API key. Connect your DID to create and manage your own agents." : network?.hosting?.registration === "allowlist" ? "Agent hosting is invite-only on this server. Anyone with a DID can publish a task." : "Connect your DID to manage agents. Hosting access is set by the server operator."}</p>
+            {!identity && !sessionToken && <p className="module-note">First unlock, create or import your owner DID above.</p>}
+            {controlError && <p className="network-warning" role="alert">{controlError}</p>}
             {!sessionToken ? (
               <button className="runner-button" onClick={() => void connectControl()} disabled={busy || !identity}>CONNECT WITH DID →</button>
             ) : (
@@ -703,7 +755,7 @@ export default function App() {
                   <div className="agent-card" key={agent.id}>
                     <div><i className={agent.enabled ? "online" : ""} /><strong>{agent.enabled ? "SCANNING" : "PAUSED"}</strong><span>{agent.provider} / {agent.model}</span></div>
                     <code>{shortDid(agent.did)}</code>
-                    <p>Trusted: {agent.policy.allowedRequesterDids.map(shortDid).join(", ")}<br />Limit: {agent.policy.maxTasksPerDay}/day · {agent.policy.maxSourcesPerTask} sources</p>
+                    <p>Requests: {agent.policy.allowedRequesterDids.includes("*") ? "Any signed requester" : agent.policy.allowedRequesterDids.map(shortDid).join(", ")}<br />Limit: {agent.policy.maxTasksPerDay}/day · {agent.policy.maxSourcesPerTask} sources</p>
                     {agent.lastError && <small>LAST ERROR · {agent.lastError}</small>}
                     <div className="agent-actions">
                       <button className={agent.enabled ? "agent-stop" : "agent-start"} onClick={() => void toggleAgent(agent)} disabled={busy}>{agent.enabled ? "PAUSE AGENT" : "START AGENT"}</button>
@@ -715,11 +767,15 @@ export default function App() {
                   </div>
                 ))}
                 <button className="new-agent-trigger" onClick={() => agentSetupOpen && !editingAgentId ? setAgentSetupOpen(false) : openNewAgentSetup()}>＋ NEW OPERATIONAL AGENT</button>
+                <button className="disconnect-control" onClick={disconnectControl} disabled={busy}>Disconnect owner control</button>
               </>
             )}
 
-            {sessionToken && agentSetupOpen && (
-              <div className="agent-setup">
+            {sessionToken && createPortal(
+              <dialog ref={agentEditor} className="network-dialog agent-editor" aria-labelledby="agent-editor-title" onCancel={event => { if (busy) event.preventDefault(); else setAgentSetupOpen(false); }}>
+              <div className="external-dialog-content">
+              <header className="settings-header"><div><span className="section-kicker">MY AGENT / CONFIGURATION</span><h2 id="agent-editor-title">{editingAgentId ? "Update your agent." : "Give your agent a place to work."}</h2><p>Your API key, your model, your work policy.</p></div><button className="settings-close" aria-label="Close agent settings" disabled={busy} onClick={() => setAgentSetupOpen(false)}>×</button></header>
+              <div className="settings-body"><div className="agent-setup">
                 <div className="agent-setup-title">{editingAgentId ? "UPDATE EXISTING AGENT" : "CREATE NEW OPERATIONAL AGENT"}</div>
                 <div className="provider-row">
                   {(["openai", "anthropic", "gemini"] as Provider[]).map((item) => <button key={item} className={provider === item ? "active" : ""} onClick={() => setProvider(item)}>{item}</button>)}
@@ -727,20 +783,24 @@ export default function App() {
                 <label><span>MODEL</span><input value={model} onChange={(event) => setModel(event.target.value)} /></label>
                 <label><span>PROVIDER API KEY</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /></label>
                 <label><span>TRUSTED REQUESTER DID(S)</span><textarea value={trustedRequesters} onChange={(event) => setTrustedRequesters(event.target.value)} /></label>
+                <p className="module-note">Starts with your own DID. Enter * to accept tasks from any signed requester.</p>
                 <div className="policy-ticket"><b>FIXED SAFE POLICY</b><span>web research only</span><span>source/JSON proof</span><span>3 tasks/day</span><span>no auto-accept</span></div>
-                <button className="host-agent" onClick={() => void createHostedAgent()} disabled={busy}>{editingAgentId ? "ENCRYPT + UPDATE AGENT →" : "ENCRYPT + HOST AGENT →"}</button>
-              </div>
+                {!editingAgentId && <label className="host-consent"><input type="checkbox" checked={hostConsent} onChange={event => setHostConsent(event.target.checked)} /><span>I authorize hosting my provider key and agent key on this server. Model use is billed to my provider account. Keys are encrypted at rest; the server operator controls the host. Task results are public.</span></label>}
+              </div></div>
+              <footer className="settings-footer"><button disabled={busy} onClick={() => setAgentSetupOpen(false)}>Cancel</button><button className="host-agent" onClick={() => void createHostedAgent()} disabled={busy || (!editingAgentId && !hostConsent)}>{editingAgentId ? "ENCRYPT + UPDATE AGENT →" : "ENCRYPT + HOST AGENT →"}</button></footer>
+              </div></dialog>, document.body
             )}
           </section>
 
-          <section className="continuity-module">
-            <div className="module-head"><span>PROTOCOL HORIZON</span><b>NO FICTION</b></div>
+          <ExternalAgent room={ROOM} apiBase={API_BASE} />
+          <section className="continuity-module"><details>
+            <summary className="module-head"><span>PROTOCOL HORIZON</span><b>READ SCOPE</b></summary>
             <p>Technocore transports signed work events. PACT adds tasks, source-based assistance and public work records. tclk/1 exists; PACT inspects hash offers but has no funded settlement adapter.</p>
             <div className="horizon-line"><b>NOW</b><i /><span>Technocore signed transport</span></div>
             <div className="horizon-line"><b>NOW</b><i /><span>Hosted autonomous agents</span></div>
             <div className="horizon-line future"><b>LATER</b><i /><span>Real FLOP settlement adapter</span></div>
             <div className="runtime-readout">LAST SYNC {shortTime(network?.lastSyncAt)}<br />ARCHIVE EVENTS {network?.eventCount ?? 0}<br />GAP {network?.archiveGap ? "DETECTED" : "NONE"}</div>
-          </section>
+          </details></section>
           <button className="control-link" onClick={exportReceipts}>EXPORT MY SIGNED RECEIPTS ↗</button>
         </aside>
       </div>

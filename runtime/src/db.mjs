@@ -153,6 +153,12 @@ export class Store {
     return this.db.prepare("SELECT * FROM agents WHERE owner_did=? AND deleted_at IS NULL ORDER BY created_at DESC").all(ownerDid);
   }
 
+  activeAgentCount(ownerDid) {
+    return ownerDid
+      ? this.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE owner_did=? AND deleted_at IS NULL").get(ownerDid).n
+      : this.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE deleted_at IS NULL").get().n;
+  }
+
   enabledAgents() {
     return this.db.prepare("SELECT * FROM agents WHERE enabled=1 AND deleted_at IS NULL ORDER BY created_at ASC").all();
   }

@@ -27,7 +27,7 @@ The repository intentionally contains only example hostnames and placeholder val
 
 - Serve the API only through HTTPS.
 - Bind the runtime container to loopback, not a public interface.
-- Keep `ALLOWED_OWNER_DIDS` narrow and review it after DID rotation.
+- In invite-only mode, keep `ALLOWED_OWNER_DIDS` narrow and review it after DID rotation. Public registration must be explicitly enabled; set per-owner and global agent limits for the host capacity. See [registration boundaries](docs/HOSTED_REGISTRATION.md).
 - Keep `PUBLIC_ORIGINS` exact; do not use wildcard origins.
 - Store `.env` with owner-only permissions and back it up separately from the database.
 - Rotate the master key only through a planned data migration. Replacing it without re-encrypting records makes stored agent credentials unreadable.
@@ -36,3 +36,4 @@ The repository intentionally contains only example hostnames and placeholder val
 ## Fork warning
 
 The owner DID key remains local in this implementation. A modified frontend can violate that guarantee. Never import a valuable DID vault into an unverified fork, mirror, or preview deployment.
+
