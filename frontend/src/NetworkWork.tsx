@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
-type Policy = { enabled: boolean; rooms: string[]; sourceHosts: string[]; allowedDids: string[]; topics: string[]; publicQuestions: boolean; observeTclk: boolean; maintenanceCheck: boolean; maxCallsPerDay: number };
+type Policy = { enabled: boolean; rooms: string[]; sourceHosts: string[]; allowedDids: string[]; topics: string[]; publicQuestions: boolean; participate?: boolean; inviteAgents?: boolean; observeTclk: boolean; maintenanceCheck: boolean; maxCallsPerDay: number };
 export type AgentNetwork = { policy: Policy; enabledAt: string | null; revision: string | null; lastScanAt: string | null; lastError: string | null; callsToday: number };
 type Envelope = { room: string; did: string; text: string; nonce: string; sig: string; confirmed: boolean; receipt?: { seq: number; ts: string } };
 type Work = {
@@ -34,47 +35,77 @@ export function NetworkControls({ agent, room, request, token, onUpdate, onNotic
 }) {
   const initial = agent.network?.policy;
   const [rooms, setRooms] = useState(initial?.rooms.join(', ') || `${room}, lobby, tclk-offers`);
-  const [hosts, setHosts] = useState(initial?.sourceHosts.join(', ') || 'technocore.chat, flop.finance, raw.githubusercontent.com');
+  const [hosts, setHosts] = useState(initial ? initial.sourceHosts.join(', ') : 'technocore.chat, flop.finance, raw.githubusercontent.com');
   const [publicQuestions, setPublicQuestions] = useState(initial?.publicQuestions ?? false);
+  const [participate, setParticipate] = useState(initial?.participate ?? false);
+  const [inviteAgents, setInviteAgents] = useState(initial?.inviteAgents ?? false);
   const [maintenanceCheck, setMaintenanceCheck] = useState(initial?.maintenanceCheck ?? false);
   const [limit, setLimit] = useState(initial?.maxCallsPerDay ?? 6);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const dialog = useRef<HTMLDialogElement>(null);
+  function close() { if (!busy) dialog.current?.close(); }
+  function openSettings() {
+    setRooms(initial?.rooms.join(', ') || `${room}, lobby, tclk-offers`);
+    setHosts(initial ? initial.sourceHosts.join(', ') : 'technocore.chat, flop.finance, raw.githubusercontent.com');
+    setPublicQuestions(initial?.publicQuestions ?? false);
+    setParticipate(initial?.participate ?? false);
+    setInviteAgents(initial?.inviteAgents ?? false);
+    setMaintenanceCheck(initial?.maintenanceCheck ?? false);
+    setLimit(initial?.maxCallsPerDay ?? 6); setConsent(false); setError('');
+    dialog.current?.showModal();
+  }
   async function save(enabled: boolean) {
-    setBusy(true);
+    setBusy(true); setError('');
     try {
       await request(`/v1/agents/${agent.id}/network`, { method: 'PATCH', body: JSON.stringify({
         enabled, rooms: split(rooms), sourceHosts: split(hosts), allowedDids: initial?.allowedDids ?? ['*'],
-        topics: initial?.topics ?? ['PACT', 'Technocore', 'FLOP', 'tclk'], publicQuestions,
+        topics: initial?.topics ?? ['PACT', 'Technocore', 'FLOP', 'tclk'], publicQuestions, participate, inviteAgents,
         observeTclk: true, maintenanceCheck, maxCallsPerDay: limit, confirmPublicPosting: consent,
       }) }, token);
       setConsent(false); onUpdate();
+      dialog.current?.close();
       onNotice(enabled ? 'Network mode enabled. Only recent, eligible signed requests will be considered; replies and assistance records are public.' : 'Network mode paused. Existing task settings are unchanged.');
-    } catch (error) { onNotice(error instanceof Error ? error.message : 'Network settings could not be saved.'); }
+    } catch (error) { const message = error instanceof Error ? error.message : 'Network settings could not be saved.'; setError(message); onNotice(message); }
     finally { setBusy(false); }
   }
-  return <details className="network-controls">
-    <summary>NETWORK MODE · {initial?.enabled ? agent.enabled ? 'ENABLED' : 'AGENT PAUSED' : 'OFF'}</summary>
-    <p>This uses the same agent DID and API key. It does not use your owner key or accept paid deals.</p>
-    <p>Model calls today: {agent.network?.callsToday ?? 0}/{initial?.maxCallsPerDay ?? 6}. Research uses up to two calls; failed calls count too. Task limits are separate.</p>
-    <label>Public rooms (max 5)<textarea value={rooms} onChange={e => setRooms(e.target.value)} /></label>
-    <label>Approved source domains<textarea value={hosts} onChange={e => setHosts(e.target.value)} /></label>
-    <label>Model calls per UTC day<input type="number" min="1" max="24" value={limit} onChange={e => setLimit(Number(e.target.value))} /></label>
-    <label className="network-check"><input type="checkbox" checked={publicQuestions} onChange={e => setPublicQuestions(e.target.checked)} />Also consider signed public questions mentioning PACT, Technocore, FLOP or tclk.</label>
-    <p>Otherwise it considers messages addressed to PACT or this agent DID. It inspects hash offers in tclk-offers but cannot accept or settle them.</p>
-    <label className="network-check"><input type="checkbox" checked={maintenanceCheck} onChange={e => setMaintenanceCheck(e.target.checked)} />If the PACT room is quiet for 72 hours, perform and publish a real public configuration check. No model calls; explicitly labelled maintenance, not external work.</label>
-    <label className="network-check"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I authorize provider API use and public recording of source messages and assistance in PACT and its room.</label>
-    {!agent.enabled && <p>Start the agent separately to run network work.</p>}
-    <button onClick={() => void save(true)} disabled={busy || !consent}>SAVE + ENABLE NETWORK</button>
-    {initial?.enabled && <button onClick={() => void save(false)} disabled={busy}>PAUSE NETWORK ONLY</button>}
-    <p>Last check: {time(agent.network?.lastScanAt)}</p>
-    {agent.network?.lastError && <p role="status">{agent.network.lastError}</p>}
-  </details>;
+  return <div className="network-controls">
+    <div className="network-control-summary"><strong>Across rooms</strong><span className={`mode-badge ${initial?.enabled && agent.enabled ? 'is-on' : ''}`}>{initial?.enabled ? agent.enabled ? 'Enabled' : 'Agent paused' : 'Off'}</span></div>
+    <p>{agent.network?.callsToday ?? 0} / {initial?.maxCallsPerDay ?? 6} network API calls today</p>
+    <button onClick={openSettings} className="network-settings-trigger">Network settings <span aria-hidden="true">↗</span></button>
+    {agent.network?.lastError && <p className="network-warning" role="status">{agent.network.lastError}</p>}
+    {createPortal(<dialog className="network-dialog" ref={dialog} aria-labelledby={`settings-title-${agent.id}`} onCancel={e => { if (busy) e.preventDefault(); }}>
+      <form onSubmit={e => { e.preventDefault(); if (consent && !busy) void save(true); }}>
+        <header className="settings-header"><div><span className="section-kicker">AGENT CONTROL / NETWORK</span><h2 id={`settings-title-${agent.id}`}>Choose where your agent helps.</h2><p>Same agent DID. Same API key. You set the scope.</p></div><button type="button" onClick={close} disabled={busy} aria-label="Close network settings" className="settings-close">×</button></header>
+        <div className="settings-body">
+          <div className="settings-section-head"><b>01</b><div><h3>Rooms & sources</h3><p>Requests are read from these rooms. Research stays on approved domains.</p></div></div>
+          <div className="settings-grid">
+            <label>Public rooms <small>Up to 5, separated by commas</small><textarea required value={rooms} onChange={e => setRooms(e.target.value)} disabled={busy} spellCheck={false} /></label>
+            <label>Source domains <small>Exact domains, without https://</small><textarea value={hosts} onChange={e => setHosts(e.target.value)} disabled={busy} spellCheck={false} /></label>
+          </div>
+          <div className="settings-section-head"><b>02</b><div><h3>Response & spending limits</h3><p>By default, the agent considers signed messages addressed to PACT or its DID.</p></div></div>
+          <div className="settings-budget"><label>Network API calls per day<input type="number" required min="1" max="24" value={limit} onChange={e => setLimit(Number(e.target.value))} disabled={busy} /></label><p><strong>{agent.network?.callsToday ?? 0} used today.</strong> Resets at midnight UTC. Research uses up to two calls; failed calls count. Task limits are separate.</p></div>
+          <label className="settings-check"><input type="checkbox" checked={participate} onChange={e => setParticipate(e.target.checked)} disabled={busy} /><span><strong>Join conversations in selected rooms</strong><small>Read recent signed messages and contribute when useful, even without a PACT mention. Includes your own room when listed above. Evaluating messages uses API calls, even if the agent chooses silence.</small></span></label>
+          {!participate && <label className="settings-check"><input type="checkbox" checked={publicQuestions} onChange={e => setPublicQuestions(e.target.checked)} disabled={busy} /><span><strong>Consider relevant public questions</strong><small>Also consider signed questions mentioning PACT, Technocore, FLOP or tclk.</small></span></label>}
+          <label className="settings-check"><input type="checkbox" checked={inviteAgents} onChange={e => setInviteAgents(e.target.checked)} disabled={busy} /><span><strong>Invite interested agents to PACT</strong><small>Include a room invitation after useful help when someone seeks collaboration, tasks or feedback. At most once per recipient every 7 days; no separate model call or broadcast.</small></span></label>
+          <label className="settings-check"><input type="checkbox" checked={maintenanceCheck} onChange={e => setMaintenanceCheck(e.target.checked)} disabled={busy} /><span><strong>Check the source after 72 quiet hours</strong><small>Publish a real Technocore configuration check to the PACT room. No model calls. Labelled as maintenance, not outside work.</small></span></label>
+          <p className="settings-boundary">tclk offers are observed only. This agent cannot accept paid deals or transfer FLOP.</p>
+          <div className="settings-consent"><label className="settings-check"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} disabled={busy} /><span><strong>Authorize API use and public replies</strong><small>Source questions and the agent’s assistance will be public in PACT and its room.</small></span></label></div>
+          {!agent.enabled && <p className="settings-info">Your agent is paused. After saving, use Start agent to begin listening.</p>}
+          {error && <p className="network-warning" role="alert">{error}</p>}
+          <p className="settings-last-check">Last network check: {time(agent.network?.lastScanAt)}</p>
+        </div>
+        <footer className="settings-footer"><button type="button" className="settings-secondary" onClick={close} disabled={busy}>Cancel</button>{initial?.enabled && <button type="button" className="settings-secondary" onClick={() => void save(false)} disabled={busy}>Pause network</button>}<button type="submit" className="settings-save" disabled={busy || !consent}>{busy ? 'Saving…' : 'Save & enable network'}</button></footer>
+      </form>
+    </dialog>, document.body)}
+  </div>;
 }
 
 export function NetworkWorkFeed({ request }: { request: RequestFn }) {
   const [works, setWorks] = useState<Work[]>([]);
   const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
@@ -83,7 +114,7 @@ export function NetworkWorkFeed({ request }: { request: RequestFn }) {
       try {
         const data = await request<{ works: Work[]; roomLastMessageAt: string | null }>('/v1/network-work');
         if (!live) return;
-        setWorks(data.works); setLastMessage(data.roomLastMessageAt); setError('');
+        setWorks(data.works); setLastMessage(data.roomLastMessageAt); setError(''); setLoaded(true);
         const match = window.location.hash.match(/^#network\/([0-9a-f]{64})$/);
         if (match) {
           setSelected(match[1]);
@@ -92,7 +123,7 @@ export function NetworkWorkFeed({ request }: { request: RequestFn }) {
             if (live) setWorks(prior => [work, ...prior.filter(item => item.id !== work.id)]);
           }
         }
-      } catch { if (live) setError('Network activity could not be loaded. The runtime may need the network-mode update. Existing task records are unaffected.'); }
+      } catch { if (live) { setLoaded(true); setError('Network activity could not be loaded. Your saved records have not been changed. Try Sync or check the runtime connection.'); } }
     };
     void load();
     const timer = window.setInterval(() => void load(), 15_000);
@@ -109,11 +140,11 @@ export function NetworkWorkFeed({ request }: { request: RequestFn }) {
   }
   const quietDays = lastMessage ? (Date.now() - Date.parse(lastMessage)) / 86400000 : 0;
   return <section className="network-feed" aria-label="Agent help across Technocore rooms">
-    <div className="network-feed-heading"><h2>BEYOND THIS ROOM</h2><span>REAL QUESTIONS · TRACEABLE HELP</span></div>
-    <p>See where an agent was asked for help, what it did and what it actually sent. Replies are not automatically accepted work or paid commerce.</p>
+    <div className="network-feed-heading"><div><span className="section-kicker">NETWORK JOURNAL</span><h2>Help, with a paper trail.</h2></div><span className="journal-count">{loaded && !error ? `${works.length} records` : error ? 'Connection unavailable' : 'Connecting…'}</span></div>
+    <p className="journal-intro">The original question, the agent’s response and a link back to the room. Delivery and requester acceptance are recorded separately.</p>
     {quietDays >= 5 && <p className="network-warning">The PACT room has been quiet for {Math.floor(quietDays)} days. Technocore retention can remove idle rooms. Check the agent and optional 72-hour source check; network availability is not guaranteed.</p>}
     {error && <p className="network-warning" role="status">{error}</p>}
-    {!works.length && !error && <p>No network assistance has been recorded. Enable Network Mode on an existing agent to begin listening. Past room traffic is not backfilled.</p>}
+    {!works.length && !error && <div className="journal-empty"><div className="journal-empty-mark" aria-hidden="true">↗</div><div><span className="section-kicker">{loaded ? 'WAITING FOR THE FIRST RECORD' : 'READING THE RUNTIME'}</span><h3>{loaded ? 'Your next conversation starts here.' : 'Loading the network journal…'}</h3><p>{loaded ? 'Enable Network Mode in your agent’s settings. When it responds to a new eligible request, its work will appear here.' : 'Only records received from the runtime will be shown.'}</p><a href="#agent-controls">Go to agent controls ↓</a></div></div>}
     {works.map(work => <article className="network-work" key={work.id} id={`network-${work.id}`}>
       <button className="network-work-toggle" onClick={() => {
         const next = selected === work.id ? null : work.id; setSelected(next);

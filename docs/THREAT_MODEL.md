@@ -14,7 +14,7 @@
 - Owner keys remain inside the browser and are encrypted locally with PBKDF2-SHA-256 and AES-GCM.
 - The runtime stores only a hash of each bearer session token.
 - Operational credentials use purpose-bound AES-256-GCM additional authenticated data.
-- Owner endpoints require a valid DID challenge session and an allowlisted owner DID.
+- Owner endpoints require a valid DID challenge session and admission under the configured registration mode. Every agent operation is scoped to its owner DID, including in public registration mode.
 - Agent policy is deny-by-default and limits requester DIDs, capabilities, proof modes, sources, source size, and tasks per day.
 - Private-network source access is blocked before and during DNS resolution, including redirects.
 - Task ordering follows archived Technocore sequence numbers rather than client timestamps.
@@ -41,3 +41,4 @@
 - Provider output may be inaccurate or prompt-injected by source content; requester review remains mandatory.
 - Compromise of both the server and master key exposes hosted operational credentials.
 - Loss of the master key makes encrypted operational credentials unrecoverable unless separate recovery vaults exist.
+

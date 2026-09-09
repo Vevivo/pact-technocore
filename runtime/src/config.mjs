@@ -41,15 +41,22 @@ function masterKey() {
 
 const dataDir = resolve(process.env.DATA_DIR || "./data");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+const hostedRegistration = process.env.HOSTED_REGISTRATION || "allowlist";
+if (!["allowlist", "open"].includes(hostedRegistration)) {
+  throw new Error("HOSTED_REGISTRATION must be allowlist or open.");
+}
 
 export const config = Object.freeze({
-  version: "0.3.0",
+  version: "0.3.1",
   port: integer("PORT", 8793, 1024, 65535),
   dataDir,
   databasePath: resolve(dataDir, "pact.sqlite"),
   masterKey: masterKey(),
   publicOrigins: new Set(requiredList("PUBLIC_ORIGINS", httpsOrigin).map(httpsOrigin)),
   allowedOwnerDids: new Set(requiredList("ALLOWED_OWNER_DIDS", ownerDid)),
+  hostedRegistration,
+  maxAgentsPerOwner: integer("MAX_AGENTS_PER_OWNER", 2, 1, 25),
+  maxHostedAgents: integer("MAX_HOSTED_AGENTS", 20, 1, 500),
   arnsUndername: (process.env.ARNS_UNDERNAME || "pact_example").toLowerCase(),
   technocoreBase: httpsOrigin(process.env.TECHNOCORE_BASE || "https://technocore.chat"),
   room: process.env.PACT_ROOM || "mb-pact-work-v1",

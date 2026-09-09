@@ -2,9 +2,11 @@
 set -Eeuo pipefail
 umask 077
 
-# Upgrade an existing flat PACT installation. Never replace its configuration or data.
+# Upgrade a flat installation, preserving keys and data. Registration changes only with an explicit flag.
 SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 TARGET_DIR=${1:-/opt/pact}
+REGISTRATION_OPTION=${2:-}
+[[ -z "$REGISTRATION_OPTION" || "$REGISTRATION_OPTION" == --open-registration ]] || { echo 'Usage: update-existing.sh [target-directory] [--open-registration]'; exit 1; }
 cd -- "$TARGET_DIR"
 TARGET_DIR=$(pwd)
 [[ "$SOURCE_DIR" != "$TARGET_DIR" ]] || { echo 'Extract the update outside the installed application directory.'; exit 1; }
@@ -38,6 +40,7 @@ rollback() {
     if [[ -d src ]]; then mv -- src "$BACKUP_DIR/failed-src"; fi
     cp -a -- "$BACKUP_DIR/src" src
     cp -p -- "$BACKUP_DIR/package.json" package.json
+    cp -p -- "$BACKUP_DIR/runtime.env" .env
     docker compose up -d --build pact-runtime || echo 'Automatic restart failed. Previous code is restored; inspect docker compose logs.'
   fi
   echo "Private backup directory: $BACKUP_DIR"
@@ -51,6 +54,18 @@ STOPPED=1
 mv -- src "$BACKUP_DIR/installed-src"
 cp -a -- "$SOURCE_DIR/src" src
 cp -- "$SOURCE_DIR/package.json" package.json
+if [[ "$REGISTRATION_OPTION" == --open-registration ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path('.env')
+lines = p.read_text().splitlines()
+lines = [line for line in lines if not re.match(r'^\s*(?:export\s+)?HOSTED_REGISTRATION\s*=', line)]
+lines.append('HOSTED_REGISTRATION=open')
+p.write_text('\n'.join(lines) + '\n')
+p.chmod(0o600)
+PY
+fi
 docker compose up -d --build pact-runtime
 
 echo 'Checking the local runtime...'
@@ -61,7 +76,7 @@ for attempt in {1..20}; do
 import json,sys
 with open(sys.argv[1]) as f:
     data=json.load(f)
-sys.exit(0 if data.get('ok') is True and data.get('version') == '0.3.0' else 1)
+sys.exit(0 if data.get('ok') is True and data.get('version') == '0.3.1' else 1)
 PY
   then HEALTH_OK=1; break; fi
   sleep 2
@@ -75,6 +90,11 @@ with open(sys.argv[1]) as f:
 assert isinstance(data.get('works'), list), 'Network endpoint has an unexpected response'
 PY
 trap - ERR
-echo 'PACT 0.3.0 is running. Existing configuration, keys and data were preserved.'
-echo 'Now publish the separate pact-site folder to ArNS. Network Mode remains off until enabled in the agent card.'
+echo 'PACT 0.3.1 is running. Existing keys and data were preserved.'
+if [[ "$REGISTRATION_OPTION" == --open-registration ]]; then
+  echo 'Public registration is enabled. Each verified DID can manage only its own agents with its own provider key.'
+else
+  echo 'Existing registration settings were preserved.'
+fi
+echo 'Publish the matching pact-site folder to ArNS. Network Mode remains opt-in in each agent card.'
 echo "Keep this backup private: $BACKUP_DIR"

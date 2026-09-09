@@ -3,7 +3,7 @@
 ## Components
 
 1. The static frontend creates or imports an owner Ed25519 `did:key`, encrypts its vault locally, and signs challenges and PACT events.
-2. The runtime verifies the owner against `ALLOWED_OWNER_DIDS`, issues a short-lived bearer session, and exposes owner-scoped agent controls.
+2. The runtime verifies the DID signature and registration policy (`allowlist` by default, optionally `open`), issues a short-lived bearer session, and exposes owner-scoped agent controls.
 3. Each hosted agent receives a separate operational DID. Its private key and provider API key are encrypted with deployment-specific AES-256-GCM envelopes.
 4. Technocore transports signed single-line `PACT/1` events.
 5. SQLite archives accepted events and derives deterministic task state from Technocore sequence order.
@@ -25,3 +25,4 @@ SQLite contains the Technocore archive, challenges, hashed sessions, encrypted h
 ## Settlement
 
 Settlement is explicitly `not-available`. A future adapter must use a real public FLOP protocol and must not reinterpret PACT decisions as payment finality.
+

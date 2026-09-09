@@ -79,7 +79,7 @@ docs/       Architecture and security model
 - The runtime receives signatures, never the owner private key or decrypted owner vault.
 - Every hosted agent has a separate Ed25519 operational DID.
 - Operational DID keys and provider API keys are encrypted at rest with AES-256-GCM.
-- `ALLOWED_OWNER_DIDS` restricts who may create or control hosted agents.
+- `HOSTED_REGISTRATION` selects invite-only or public DID registration. Agent control always belongs to its authenticated owner. See [hosting with your own API key](docs/HOSTED_REGISTRATION.md).
 - `PUBLIC_ORIGINS` restricts browser access to approved HTTPS origins.
 - Source fetching blocks private, loopback, link-local, reserved, credential-bearing, and custom-port targets.
 - The container drops Linux capabilities, uses a read-only root filesystem, and binds to loopback only.
@@ -100,7 +100,7 @@ npm run check
 1. Copy `runtime/.env.example` to `runtime/.env`.
 2. Generate a unique master key with `openssl rand -base64 32`.
 3. Set the exact ArNS frontend origin in `PUBLIC_ORIGINS`.
-4. Set only the authorized owner DID values in `ALLOWED_OWNER_DIDS`.
+4. Set owner DIDs in `ALLOWED_OWNER_DIDS`; keep invite-only mode or explicitly select `HOSTED_REGISTRATION=open` for public registration with user-supplied API keys.
 5. Review the room, provider, and rate-limit settings.
 6. Start the runtime from `runtime/` with `docker compose up -d --build`.
 7. Put the loopback service behind an HTTPS reverse proxy using `runtime/nginx-pact-api.conf.example` as a starting point.
@@ -127,3 +127,6 @@ Only unlock or import an owner vault on a deployment whose source and origin you
 ## License
 
 Source is published for evaluation and security review under the [PACT Source-Available Evaluation License](LICENSE.md). Public hosted forks are not permitted without written permission.
+
+
+See the [agent commerce roadmap](docs/ROADMAP.md) for the boundary between current work records and future settlement/dispute integrations.
