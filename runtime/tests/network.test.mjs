@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../src/db.mjs';
 import { NetworkStore } from '../src/network-store.mjs';
 import { NetworkWorker, parseRoomJson } from '../src/network-worker.mjs';
-import { normalizeNetworkPolicy, candidateKind, inspectHashOffer, verifiedRecord, recordId, sourceUrls } from '../src/network-policy.mjs';
+import { normalizeNetworkPolicy, candidateKind, externalResearchRequest, homeConversationRequest, inspectHashOffer, verifiedRecord, recordId, sourceUrls } from '../src/network-policy.mjs';
 import { generateIdentity, seal, signWithJwk, sha256 } from '../src/crypto.mjs';
 import { normalizePolicy } from '../src/policy.mjs';
 import { createApi } from '../src/http-api.mjs';
@@ -290,4 +290,153 @@ test('maintenance skips recent activity and never announces a failed or paused c
   };
   await f2.worker.maintenance(f2.agent, p2);
   assert.equal(f2.ledger.recent()[0].status, 'paused'); assert.equal(f2.posts.length, 0);
+});
+
+test('full daily budget creates no new records and still reconciles already sent work', async t => {
+  const f = fixture(t);
+  const profile = f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, maxCallsPerDay: 2 });
+  f.create(); f.messages.set('lobby', [f.source]);
+  await f.worker.execute(f.workId, f.agent, profile);
+  assert.equal(f.ledger.callsToday(f.agent.id), 2);
+  f.messages.get('lobby').push(...Array.from({ length: 20 }, (_, i) => signed(f.peer, 'lobby', `PACT, explain request ${i}?`, i + 10)));
+  for (let i = 0; i < 3; i++) {
+    f.store.setState(`network-cooldown:${f.agent.id}`, '0');
+    await f.worker.scan();
+  }
+  assert.equal(f.ledger.recent().length, 1);
+  assert.equal(f.inference.length, 2);
+  assert.equal(f.posts.length, 2);
+  assert.equal(f.ledger.get(f.workId).status, 'reply_submitted');
+});
+
+test('home-only research posts once to home, reports honest source coordinates and survives restart', async t => {
+  const f = fixture(t);
+  const profile = f.ledger.saveProfile(f.agent.id, normalizeNetworkPolicy({ ...f.profile.policy, homeRoomOnly: true, participate: true, inviteAgents: true }));
+  f.create();
+  await f.worker.execute(f.workId, f.agent, profile);
+  assert.equal(f.posts.length, 1); assert.equal(f.posts[0].room, f.config.room);
+  assert.equal(f.ledger.get(f.workId).reply_json, null);
+  const report = JSON.parse(f.posts[0].text.slice('PACT-NET/1 '.length));
+  assert.equal(report.source.room, 'lobby'); assert.equal(report.source.seq, f.source.seq);
+  assert.equal(report.source.textHash, sha256(f.source.text));
+  assert.equal(report.publication.sourceRoomDelivery, 'not-sent'); assert.equal(report.replySeq, null);
+  assert.equal(report.evidence.length, 1);
+  const restarted = new NetworkWorker(f.config, f.store, new NetworkStore(f.store), () => {}, f.deps); restarted.running = true;
+  await restarted.deliver(f.workId, f.agent, profile);
+  assert.equal(f.ledger.get(f.workId).status, 'reply_submitted');
+  assert.equal(f.ledger.publishedRecent().length, 1);
+  assert.equal(f.ledger.callsToday(f.agent.id), 2);
+  assert.equal(restarted.invitation(f.agent, profile, 'lobby', f.peer.did), null);
+  const secondSource = signed(f.peer, 'kibble', 'Please compare https://example.com/other and its summary.', 2);
+  const secondId = sha256('second-external-job');
+  f.ledger.create({ id: secondId, agent: f.agent, room: 'kibble', source: secondSource, kind: 'question' });
+  await restarted.execute(secondId, f.agent, profile);
+  assert.equal(f.ledger.get(secondId).status, 'skipped');
+  assert.equal(f.posts.length, 1); assert.equal(f.inference.length, 2);
+  assert.equal(f.ledger.externalUsedToday(f.agent.id, f.config.room), true);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  assert.equal(f.ledger.externalUsedToday(f.agent.id, f.config.room, tomorrow), false);
+  assert.equal(f.ledger.reserveExternalJob(secondId, f.agent.id, f.config.room, tomorrow), true);
+  assert.equal(f.ledger.reserveExternalJob(f.workId, f.agent.id, f.config.room, tomorrow), false);
+});
+
+test('daily research selection does not invent a job when ignored and cannot spend another daily slot', async t => {
+  const f = fixture(t);
+  const profile = f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, homeRoomOnly: true });
+  f.create();
+  f.worker.infer = async () => ({ summary: JSON.stringify({ action: 'ignore', title: 'Not a concrete request', answer: '' }) });
+  await f.worker.execute(f.workId, f.agent, profile);
+  assert.equal(f.ledger.callsToday(f.agent.id), 1); assert.equal(f.posts.length, 0);
+  assert.equal(f.ledger.publishedRecent().length, 0);
+  const another = sha256('another-candidate');
+  f.ledger.create({ id: another, agent: f.agent, room: 'kibble', source: signed(f.peer, 'kibble', f.source.text), kind: 'question' });
+  await f.worker.execute(another, f.agent, profile);
+  assert.equal(f.ledger.callsToday(f.agent.id), 1);
+  assert.equal(f.ledger.get(another).status, 'skipped');
+});
+
+test('daily research scope ignores chatter and prioritizes home without duplicate home reports', async t => {
+  const f = fixture(t);
+  const profile = f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, homeRoomOnly: true, participate: true, rooms: ['lobby', 'kibble', f.config.room] });
+  assert.equal(externalResearchRequest('Did someone mention an airdrop snapshot? https://example.com/x', profile.policy), false);
+  assert.equal(externalResearchRequest('Please check https://evil.test/x', profile.policy), false);
+  assert.equal(externalResearchRequest('Please compare https://example.com/x', profile.policy), true);
+  assert.equal(homeConversationRequest('Node online. Checking in.'), false);
+  assert.equal(homeConversationRequest('Can you explain how PACT tasks work?'), true);
+  f.messages.set('lobby', [signed(f.peer, 'lobby', f.source.text)]);
+  f.messages.set(f.config.room, [signed(f.peer, f.config.room, 'Can you explain how PACT tasks work?')]);
+  const infer = f.worker.infer; let firstRoom;
+  f.worker.infer = async (...args) => {
+    firstRoom ??= args[3].brief.includes(`in room ${f.config.room}.`) ? 'home' : 'external';
+    if (args[3].brief.includes(`in room ${f.config.room}.`)) return { summary: JSON.stringify({ action: 'reply', title: 'PACT task flow', answer: 'Publish a signed task, review the result, and record your decision.' }) };
+    return infer(...args);
+  };
+  await f.worker.scan(); await f.worker.scan();
+  assert.equal(firstRoom, 'home');
+  assert.equal(f.posts.length, 2);
+  assert.equal(f.posts.every(post => post.room === f.config.room), true);
+  assert.equal(f.ledger.publishedRecent().length, 2);
+  assert.equal(f.ledger.callsToday(f.agent.id), 3);
+  f.store.setState(`network-cooldown:${f.agent.id}:home`, '0');
+  f.messages.get(f.config.room).push(signed(f.peer, f.config.room, 'Can you explain how to review a source?', 100));
+  await f.worker.scan();
+  assert.equal(f.ledger.callsToday(f.agent.id), 4); // home remains usable after the outside slot
+  assert.equal(f.posts.length, 3);
+});
+
+test('home-only publication blocks old unsent external envelopes but reconciles an attempted one', async t => {
+  const f = fixture(t); f.create();
+  const profile = f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, homeRoomOnly: true });
+  const envelope = f.worker.makeEnvelope(f.agent, 'lobby', 'A reply prepared under a previous policy.');
+  f.ledger.update(f.workId, { status: 'reply_pending', reply_json: JSON.stringify(envelope) });
+  await f.worker.deliver(f.workId, f.agent, profile);
+  assert.equal(f.posts.length, 0); assert.equal(f.ledger.get(f.workId).status, 'paused');
+  const f2 = fixture(t); f2.create();
+  await f2.worker.execute(f2.workId, f2.agent, f2.profile);
+  const p2 = f2.ledger.saveProfile(f2.agent.id, { ...f2.profile.policy, homeRoomOnly: true });
+  await f2.worker.deliver(f2.workId, f2.agent, p2);
+  assert.equal(f2.posts.length, 1); // only the publication before the policy change
+  assert.equal(f2.ledger.get(f2.workId).status, 'mirror_pending');
+  await f2.worker.deliver(f2.workId, f2.agent, p2);
+  assert.equal(f2.posts[1].room, f2.config.room);
+});
+
+test('public feed excludes internal attempts before applying limit and preserves direct receipts', async t => {
+  const f = fixture(t); f.create();
+  for (let i = 0; i < 55; i++) {
+    const id = sha256(`budget-record-${i}`);
+    f.ledger.create({ id, agent: f.agent, room: 'lobby', source: f.source, kind: 'question' });
+    f.ledger.step(id, 'budget_limited', 'No API call was made.');
+  }
+  await f.worker.execute(f.workId, f.agent, f.profile);
+  await f.worker.deliver(f.workId, f.agent, f.profile);
+  await f.worker.deliver(f.workId, f.agent, f.profile);
+  await f.worker.deliver(f.workId, f.agent, f.profile);
+  const api = createApi(f.config, f.store, {}, () => {}, f.ledger);
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => api.close(resolve)));
+  const base = `http://127.0.0.1:${api.address().port}`;
+  const feed = await (await fetch(`${base}/v1/network-work`)).json();
+  assert.equal(feed.works.length, 1); assert.equal(feed.works[0].id, f.workId);
+  assert.equal(feed.visibility, 'published-results');
+  const old = await (await fetch(`${base}/v1/network-work/${sha256('budget-record-0')}`)).json();
+  assert.equal(old.status, 'budget_limited');
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM network_work').get().n, 56);
+});
+
+test('saving from an older frontend preserves home-only policy and the daily slot', async t => {
+  const f = fixture(t); f.create();
+  f.ledger.saveProfile(f.agent.id, { ...f.profile.policy, homeRoomOnly: true });
+  f.ledger.reserveExternalJob(f.workId, f.agent.id, f.config.room);
+  f.store.createSession(sha256('owner-token'), f.owner.did, new Date().toISOString(), new Date(Date.now() + 60000).toISOString());
+  const api = createApi(f.config, f.store, {}, () => {}, f.ledger);
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => api.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${api.address().port}/v1/agents/${f.agent.id}/network`, { method: 'PATCH',
+    headers: { authorization: 'Bearer owner-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: true, rooms: ['lobby', f.config.room], maxCallsPerDay: 12, confirmPublicPosting: true }) });
+  assert.equal(response.status, 200);
+  assert.equal(f.ledger.profile(f.agent.id).policy.homeRoomOnly, true);
+  assert.equal(f.ledger.externalUsedToday(f.agent.id, f.config.room), true);
+  assert.throws(() => normalizeNetworkPolicy({ homeRoomOnly: 'yes' }), /boolean/);
 });

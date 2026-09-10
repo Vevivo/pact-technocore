@@ -24,11 +24,11 @@ export function normalizeNetworkPolicy(input = {}) {
   if (topics.length > 8 || topics.some(topic => typeof topic !== 'string' || topic.length < 3 || topic.length > 40)) throw new Error('Choose up to eight topics of 3–40 characters.');
   const maxCallsPerDay = input.maxCallsPerDay ?? 6;
   if (!Number.isInteger(maxCallsPerDay) || maxCallsPerDay < 1 || maxCallsPerDay > 24) throw new Error('Network model-call limit must be 1–24 per UTC day.');
-  for (const key of ['enabled', 'publicQuestions', 'participate', 'inviteAgents', 'observeTclk', 'maintenanceCheck']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} must be boolean.`);
+  for (const key of ['enabled', 'publicQuestions', 'participate', 'inviteAgents', 'observeTclk', 'maintenanceCheck', 'homeRoomOnly']) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} must be boolean.`);
   if (input.enabled && (!rooms.length || !allowedDids.length)) throw new Error('Choose rooms and allowed requesters before enabling network work.');
   return { enabled: input.enabled ?? false, rooms, sourceHosts, allowedDids, topics,
     publicQuestions: input.publicQuestions ?? false, participate: input.participate ?? false, inviteAgents: input.inviteAgents ?? false, observeTclk: input.observeTclk ?? true,
-    maintenanceCheck: input.maintenanceCheck ?? false, maxCallsPerDay };
+    maintenanceCheck: input.maintenanceCheck ?? false, maxCallsPerDay, homeRoomOnly: input.homeRoomOnly ?? false };
 }
 
 export function verifiedRecord(room, record) {
@@ -67,6 +67,19 @@ export function sourceUrls(text, policy) {
           && (url.hostname !== 'technocore.chat' || !url.pathname.startsWith('/kv/'));
       } catch { return false; }
     }).slice(0, 3);
+}
+
+// External daily work must request a concrete source-based deliverable. Merely
+// mentioning an airdrop, sending a heartbeat or sharing a URL is not a job.
+export function externalResearchRequest(text, policy) {
+  return sourceUrls(text, policy).length > 0
+    && /\b(summari[sz]e|compare|explain|review|check|verify|analy[sz]e|extract|translate|calculate)\b|özetle|karşılaştır|açıkla|incele|doğrula|hesapla|çevir/iu.test(text)
+    && !/\b(airdrop|heartbeat|checking in|presence confirmed|snapshot eligibility)\b|^probe v1\b/iu.test(text);
+}
+
+export function homeConversationRequest(text) {
+  if (text.trim().length < 12 || /^probe v1\b|\b(heartbeat|checking in|presence confirmed|node online)\b/iu.test(text)) return false;
+  return /[?？]|\b(please|help|summari[sz]e|compare|explain|review|check|verify|analy[sz]e|extract|translate|calculate|feedback)\b|yardım|özetle|karşılaştır|açıkla|incele|doğrula|hesapla|çevir/iu.test(text);
 }
 
 // Read-only hash-offer inspection. This is NOT a tclk transcript state machine or a settlement adapter.

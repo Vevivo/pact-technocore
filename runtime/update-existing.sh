@@ -76,7 +76,7 @@ for attempt in {1..20}; do
 import json,sys
 with open(sys.argv[1]) as f:
     data=json.load(f)
-sys.exit(0 if data.get('ok') is True and data.get('version') == '0.3.1' else 1)
+sys.exit(0 if data.get('ok') is True and data.get('version') == '0.3.2' else 1)
 PY
   then HEALTH_OK=1; break; fi
   sleep 2
@@ -90,11 +90,11 @@ with open(sys.argv[1]) as f:
 assert isinstance(data.get('works'), list), 'Network endpoint has an unexpected response'
 PY
 trap - ERR
-echo 'PACT 0.3.1 is running. Existing keys and data were preserved.'
+echo 'PACT 0.3.2 is running. Existing keys and data were preserved.'
 if [[ "$REGISTRATION_OPTION" == --open-registration ]]; then
   echo 'Public registration is enabled. Each verified DID can manage only its own agents with its own provider key.'
 else
   echo 'Existing registration settings were preserved.'
 fi
-echo 'Publish the matching pact-site folder to ArNS. Network Mode remains opt-in in each agent card.'
+echo 'The 0.3.1 frontend remains compatible. No ArNS upload is needed for this runtime update.'
 echo "Keep this backup private: $BACKUP_DIR"
