@@ -47,7 +47,7 @@ if (!["allowlist", "open"].includes(hostedRegistration)) {
 }
 
 export const config = Object.freeze({
-  version: "0.3.2",
+  version: "0.4.0",
   port: integer("PORT", 8793, 1024, 65535),
   dataDir,
   databasePath: resolve(dataDir, "pact.sqlite"),
@@ -62,6 +62,10 @@ export const config = Object.freeze({
   room: process.env.PACT_ROOM || "mb-pact-work-v1",
   sessionTtlMs: integer("SESSION_TTL_HOURS", 24, 1, 168) * 60 * 60 * 1000,
   agentScanMs: integer("AGENT_SCAN_SECONDS", 15, 10, 300) * 1000,
+  evidenceEnabled: process.env.EVIDENCE_ENABLED !== 'false',
+  evidencePollMs: integer('EVIDENCE_POLL_SECONDS', 15, 15, 300) * 1000,
+  evidenceMaxRecords: integer('EVIDENCE_MAX_RECORDS', 50000, 200, 500000),
+  evidenceMaxBytes: integer('EVIDENCE_MAX_MIB', 100, 1, 1024) * 1024 * 1024,
   logLevel: process.env.LOG_LEVEL || "info",
 });
 
