@@ -176,7 +176,7 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         return;
       }
       if (request.method === 'GET' && url.pathname === '/v1/network-work') {
-        json(response, 200, { works: networkLedger.recent(), roomLastMessageAt: store.state('technocore_room_last_message')?.value ?? null, settlement: 'not-available' }, headers);
+        json(response, 200, { works: networkLedger.publishedRecent(), visibility: 'published-results', roomLastMessageAt: store.state('technocore_room_last_message')?.value ?? null, settlement: 'not-available' }, headers);
         return;
       }
       const workMatch = url.pathname.match(/^\/v1\/network-work\/([0-9a-f]{64})$/);
@@ -194,7 +194,13 @@ export function createApi(config, store, technocore, logger, networkLedger = new
         if (!agent) throw new HttpError(404, 'Agent not found.');
         const input = await body(request);
         let policy;
-        try { policy = normalizeNetworkPolicy(input?.enabled === false ? { ...networkLedger.profile(agent.id).policy, enabled: false } : input); }
+        try {
+          if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Network policy must be an object.');
+          const previous = networkLedger.profile(agent.id).policy;
+          // Older frontends do not know homeRoomOnly. Preserve the server-side
+          // publication boundary unless the authenticated owner explicitly changes it.
+          policy = normalizeNetworkPolicy(input.enabled === false ? { ...previous, enabled: false } : { ...previous, ...input });
+        }
         catch (error) { throw new HttpError(400, error.message); }
         if (policy.enabled && !publicRoom(config.room)) throw new HttpError(400, 'Network mirroring requires a public PACT destination room.');
         if (policy.enabled && input.confirmPublicPosting !== true) throw new HttpError(400, 'Confirm public source/reply mirroring and provider API spending before enabling network mode.');

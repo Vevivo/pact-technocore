@@ -47,7 +47,7 @@ if (!["allowlist", "open"].includes(hostedRegistration)) {
 }
 
 export const config = Object.freeze({
-  version: "0.3.1",
+  version: "0.3.2",
   port: integer("PORT", 8793, 1024, 65535),
   dataDir,
   databasePath: resolve(dataDir, "pact.sqlite"),

@@ -26,6 +26,10 @@ export class NetworkStore {
         agent_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(work_id, phase)
       );
       CREATE INDEX IF NOT EXISTS network_calls_agent_created ON network_calls(agent_id, created_at);
+      CREATE TABLE IF NOT EXISTS network_external_days (
+        agent_id TEXT NOT NULL REFERENCES agents(id), day TEXT NOT NULL,
+        work_id TEXT NOT NULL REFERENCES network_work(id), PRIMARY KEY(agent_id, day)
+      );
     `);
   }
   profile(agentId) {
@@ -79,6 +83,25 @@ export class NetworkStore {
       return Boolean(added);
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
+  externalUsedToday(agentId, homeRoom, day = new Date().toISOString().slice(0, 10)) {
+    return Boolean(this.db.prepare('SELECT 1 FROM network_external_days WHERE agent_id=? AND day=?').get(agentId, day)
+      // Count existing publications during upgrades, even when no daily slot was stored.
+      || this.db.prepare(`SELECT 1 FROM network_work WHERE agent_id=? AND room!=?
+        AND (reply_json IS NOT NULL OR mirror_json IS NOT NULL)
+        AND (substr(created_at,1,10)=? OR substr(json_extract(result_json,'$.finishedAt'),1,10)=?
+          OR substr(json_extract(mirror_json,'$.receipt.ts'),1,10)=?
+          OR status IN ('reply_pending','mirror_pending')) LIMIT 1`).get(agentId, homeRoom, day, day, day));
+  }
+  reserveExternalJob(id, agentId, homeRoom, day = new Date().toISOString().slice(0, 10)) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const added = !this.externalUsedToday(agentId, homeRoom, day)
+        && this.db.prepare('INSERT OR IGNORE INTO network_external_days(agent_id,day,work_id) VALUES(?,?,?)')
+          .run(agentId, day, id).changes === 1;
+      this.db.exec('COMMIT');
+      return Boolean(added);
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
   pending() {
     return this.db.prepare("SELECT * FROM network_work WHERE status IN ('reply_pending','mirror_pending') ORDER BY created_at LIMIT 5").all();
   }
@@ -88,6 +111,12 @@ export class NetworkStore {
     }
   }
   recent(limit = 50) { return this.db.prepare('SELECT * FROM network_work ORDER BY created_at DESC LIMIT ?').all(limit).map(row => this.publicWork(row)); }
+  publishedRecent(limit = 50) {
+    return this.db.prepare(`SELECT * FROM network_work
+      WHERE json_extract(result_json, '$.summary') IS NOT NULL
+      AND (json_extract(reply_json, '$.confirmed')=1 OR json_extract(mirror_json, '$.confirmed')=1)
+      ORDER BY created_at DESC LIMIT ?`).all(limit).map(row => this.publicWork(row));
+  }
   publicWork(row) {
     const result = row.result_json ? JSON.parse(row.result_json) : null;
     return { id: row.id, agentDid: row.agent_did, room: row.room, source: JSON.parse(row.source_json),
