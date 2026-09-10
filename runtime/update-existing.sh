@@ -11,7 +11,7 @@ cd -- "$TARGET_DIR"
 TARGET_DIR=$(pwd)
 [[ "$SOURCE_DIR" != "$TARGET_DIR" ]] || { echo 'Extract the update outside the installed application directory.'; exit 1; }
 [[ -f .env && -f compose.yaml && -d src && -f package.json ]] || { echo 'Existing PACT installation not found. Nothing changed.'; exit 1; }
-[[ -f "$SOURCE_DIR/src/index.mjs" && -f "$SOURCE_DIR/package.json" ]] || { echo 'Update package is incomplete.'; exit 1; }
+[[ -f "$SOURCE_DIR/src/index.mjs" && -f "$SOURCE_DIR/package.json" && -f "$SOURCE_DIR/package-lock.json" && -f "$SOURCE_DIR/Dockerfile" ]] || { echo 'Update package is incomplete.'; exit 1; }
 for command in docker curl python3 flock; do command -v "$command" >/dev/null || { echo "Missing command: $command"; exit 1; }; done
 exec 9>.pact-update.lock
 flock -n 9 || { echo 'Another PACT update is already running.'; exit 1; }
@@ -25,6 +25,7 @@ BACKUP_DIR=$(mktemp -d "$TARGET_DIR/pact-backup-XXXXXXXX")
 chmod 700 "$BACKUP_DIR"
 cp -a -- src "$BACKUP_DIR/src"
 cp -p -- package.json "$BACKUP_DIR/package.json"
+for file in Dockerfile package-lock.json; do if [[ -f "$file" ]]; then cp -p -- "$file" "$BACKUP_DIR/$file"; fi; done
 cp -p -- .env "$BACKUP_DIR/runtime.env"
 chmod 600 "$BACKUP_DIR/runtime.env"
 echo 'Creating a consistent SQLite backup in the existing data volume...'
@@ -40,6 +41,10 @@ rollback() {
     if [[ -d src ]]; then mv -- src "$BACKUP_DIR/failed-src"; fi
     cp -a -- "$BACKUP_DIR/src" src
     cp -p -- "$BACKUP_DIR/package.json" package.json
+    for file in Dockerfile package-lock.json; do
+      if [[ -f "$BACKUP_DIR/$file" ]]; then cp -p -- "$BACKUP_DIR/$file" "$file";
+      elif [[ -f "$file" ]]; then mv -- "$file" "$BACKUP_DIR/failed-$file"; fi
+    done
     cp -p -- "$BACKUP_DIR/runtime.env" .env
     docker compose up -d --build pact-runtime || echo 'Automatic restart failed. Previous code is restored; inspect docker compose logs.'
   fi
@@ -54,6 +59,8 @@ STOPPED=1
 mv -- src "$BACKUP_DIR/installed-src"
 cp -a -- "$SOURCE_DIR/src" src
 cp -- "$SOURCE_DIR/package.json" package.json
+cp -- "$SOURCE_DIR/package-lock.json" package-lock.json
+cp -- "$SOURCE_DIR/Dockerfile" Dockerfile
 if [[ "$REGISTRATION_OPTION" == --open-registration ]]; then
   python3 - <<'PY'
 from pathlib import Path
@@ -76,7 +83,7 @@ for attempt in {1..20}; do
 import json,sys
 with open(sys.argv[1]) as f:
     data=json.load(f)
-sys.exit(0 if data.get('ok') is True and data.get('version') == '0.3.2' else 1)
+sys.exit(0 if data.get('ok') is True and data.get('version') == '0.4.0' else 1)
 PY
   then HEALTH_OK=1; break; fi
   sleep 2
@@ -89,12 +96,14 @@ with open(sys.argv[1]) as f:
     data=json.load(f)
 assert isinstance(data.get('works'), list), 'Network endpoint has an unexpected response'
 PY
+curl -fsS --max-time 10 http://127.0.0.1:8793/v1/evidence > "$BACKUP_DIR/new-evidence-health.json"
 trap - ERR
-echo 'PACT 0.3.2 is running. Existing keys and data were preserved.'
+echo 'PACT 0.4.0 is running. Existing keys and data were preserved.'
 if [[ "$REGISTRATION_OPTION" == --open-registration ]]; then
   echo 'Public registration is enabled. Each verified DID can manage only its own agents with its own provider key.'
 else
   echo 'Existing registration settings were preserved.'
 fi
-echo 'The 0.3.1 frontend remains compatible. No ArNS upload is needed for this runtime update.'
+echo 'Publish the matching 0.4.0 pact-site folder to show the Evidence tab. Older work-board clients remain compatible.'
+echo 'Evidence collection is read-only. Free-only uploads and archive room summaries require explicit operator consent in Evidence settings.'
 echo "Keep this backup private: $BACKUP_DIR"

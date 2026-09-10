@@ -7,6 +7,7 @@ import { validProvider } from "./providers.mjs";
 import { buildTaskViews } from "./tasks.mjs";
 import { NetworkStore } from './network-store.mjs';
 import { normalizeNetworkPolicy, publicRoom } from './network-policy.mjs';
+import { evidenceRoute } from './evidence-api.mjs';
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -137,7 +138,7 @@ function agentCreateInput(input) {
   return { provider: input.provider, model: modelName(input.model), apiKey: input.apiKey, policy: normalizePolicy(input.policy) };
 }
 
-export function createApi(config, store, technocore, logger, networkLedger = new NetworkStore(store)) {
+export function createApi(config, store, technocore, logger, networkLedger = new NetworkStore(store), evidence = null) {
   const agentView = row => ({ ...publicAgent(row), network: { ...networkLedger.profile(row.id), callsToday: networkLedger.callsToday(row.id) } });
   const limiter = new RateLimiter();
   const sweep = setInterval(() => { limiter.sweep(); store.purgeExpired(new Date().toISOString()); }, 60_000);
@@ -160,6 +161,10 @@ export function createApi(config, store, technocore, logger, networkLedger = new
       const limit = bucket === "read" ? 120 : 30;
       if (!limiter.take(`${bucket}:${ip}`, limit)) throw new HttpError(429, "Too many requests. Try again shortly.");
       const url = new URL(request.url || "/", "http://pact.local");
+      if (evidence) {
+        try { if (await evidenceRoute({ request, response, url, config, store, ...evidence, json, headers, body, authenticate })) return; }
+        catch (error) { if ([400,401,403,404,405,413].includes(error.status)) throw new HttpError(error.status,error.message); throw error; }
+      }
 
       if (request.method === "GET" && url.pathname === "/healthz") {
         const snapshot = networkSnapshot(config, store);

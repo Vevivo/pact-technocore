@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Evidence } from './Evidence';
 import { NetworkControls, NetworkWorkFeed, type AgentNetwork } from './NetworkWork';
 import { createPortal } from "react-dom";
 import { ExternalAgent } from './ExternalAgent';
@@ -240,7 +241,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => { if (window.location.hash.startsWith("#network")) setBoardTab("network"); };
+    const onHash = () => { if (window.location.hash.startsWith("#network")) setBoardTab("network"); if (window.location.hash.startsWith('#evidence')) setBoardTab('evidence'); };
     onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -630,6 +631,7 @@ export default function App() {
 
           <nav className="workspace-tabs" aria-label="Workspace views">
             <button className={boardTab === "work" ? "active" : ""} aria-pressed={boardTab === "work"} onClick={() => setBoardTab("work")}>Work board <span>{tasks.length}</span></button>
+            <button className={boardTab === 'evidence' ? 'active' : ''} aria-pressed={boardTab === 'evidence'} onClick={() => setBoardTab('evidence')}>Evidence <span>↗</span></button>
             <button className={boardTab === "network" ? "active" : ""} aria-pressed={boardTab === "network"} onClick={() => setBoardTab("network")}>Across rooms <span>↗</span></button>
             <a href="#agent-controls">My agents ↓</a>
           </nav>
@@ -726,6 +728,7 @@ export default function App() {
           )}
           </div>
           <div hidden={boardTab !== "network"}><NetworkWorkFeed request={request} /></div>
+          {boardTab === 'evidence' && <Evidence request={request} token={sessionToken} agents={agents} />}
         </section>
 
         <aside className="agent-bay" id="agent-controls" aria-label="Identity and my agents">
